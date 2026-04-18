@@ -1,0 +1,26 @@
+# Supabase & Docker
+.temp/
+volumes/
+postgres/data/
+backend_local/supabase/.temp/
+backend_local/supabase/.branches/
+backend_local/supabase/config.toml
+
+node_modules/
+**/node_modules/
+
+# Ne pas ignorer les migrations
+!backend_local/supabase/migrations/
+
+# Logs et Système
+*.log
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+
+**/.env
+**/__pycache__/
+**/venv
