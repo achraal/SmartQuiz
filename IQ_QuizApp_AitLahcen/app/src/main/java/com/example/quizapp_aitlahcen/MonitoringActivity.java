@@ -1,16 +1,20 @@
 package com.example.quizapp_aitlahcen;
 
+import android.graphics.Color;
 import android.media.MediaPlayer;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.View;
 import android.widget.Button;
 import android.widget.ImageButton;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.cardview.widget.CardView;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -53,6 +57,9 @@ public class MonitoringActivity extends AppCompatActivity implements OnMapReadyC
     private android.os.Handler seekHandler = new android.os.Handler();
     private float currentSpeed = 1.0f;
     private String currentPlayingUrl = "";
+    private TextView tvFraudReason, tvFraudDate, tvFraudStatus;
+    private CardView cardFraud;
+    Button btnResetFraud;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -75,6 +82,22 @@ public class MonitoringActivity extends AppCompatActivity implements OnMapReadyC
         rvAudios = findViewById(R.id.rvAudios);
         rvAudios.setLayoutManager(new LinearLayoutManager(this));
 
+        cardFraud = findViewById(R.id.cardFraud);
+        tvFraudReason = findViewById(R.id.tvFraudReason); // Ajoute cette ligne car tu as déjà tvFraudDate
+        tvFraudDate = findViewById(R.id.tvFraudDate);
+        tvFraudStatus = findViewById(R.id.tvFraudStatus);
+        btnResetFraud = findViewById(R.id.btnResetFraud);
+
+        btnResetFraud.setOnClickListener(v -> {
+            new AlertDialog.Builder(this)
+                    .setTitle("Autoriser le repassage")
+                    .setMessage("Voulez-vous vraiment effacer l'historique de fraude pour " + studentName + " ?")
+                    .setPositiveButton("Oui, réinitialiser", (dialog, which) -> resetFraudStatus(studentId))
+                    .setNegativeButton("Annuler", null)
+                    .setIcon(android.R.drawable.ic_dialog_alert) // Optionnel : ajoute une petite icône
+                    .show();
+        });
+
         // Callback vers playAudio
         audioAdapter = new AudioAdapter(audioUrls, (url, seekBar, btnSpeed, btnPlay) -> {
             playAudio(url, seekBar, btnSpeed, btnPlay);
@@ -88,81 +111,6 @@ public class MonitoringActivity extends AppCompatActivity implements OnMapReadyC
 
         //fetchUserAudios();
     }
-
-    // --- PARTIE SESSIONS ET PHOTOS ---
-
-    /*private void loadSessionsAndPhotos() {
-        String listUrl = SupabaseConfig.BASE_URL + "/storage/v1/object/list/monitoring";
-        String jsonBody = "{\"prefix\": \"" + studentId + "/\"}";
-
-        okhttp3.RequestBody body = okhttp3.RequestBody.create(
-                okhttp3.MediaType.parse("application/json"), jsonBody);
-
-        Request request = new Request.Builder()
-                .url(listUrl)
-                .addHeader("apikey", SupabaseConfig.API_KEY)
-                .addHeader("Authorization", "Bearer " + adminToken)
-                .post(body)
-                .build();
-
-        client.newCall(request).enqueue(new Callback() {
-            @Override
-            public void onResponse(Call call, Response response) throws IOException {
-                if (response.isSuccessful()) {
-                    StorageFile[] folders = new Gson().fromJson(response.body().string(), StorageFile[].class);
-                    if (folders != null) {
-                        runOnUiThread(() -> sessionList.clear());
-                        for (StorageFile folder : folders) {
-                            // On cherche les dossiers de session (id null)
-                            if (folder.id == null && !folder.name.equals(".emptyFolderPlaceholder")) {
-                                Session session = new Session(folder.name);
-                                runOnUiThread(() -> {
-                                    sessionList.add(session);
-                                    sessionAdapter.notifyDataSetChanged();
-                                });
-                                // On charge les photos pour cette session précise
-                                fetchPhotosForType(session, "front");
-                                fetchPhotosForType(session, "back");
-                            }
-                        }
-                    }
-                }
-            }
-            @Override public void onFailure(Call call, IOException e) { Log.e("STORAGE", "Erreur sessions", e); }
-        });
-    }*/
-    // --- PARTIE CARTE ET GPS ---
-    /*private void loadMonitoringData() {
-        String url = SupabaseConfig.BASE_URL + "/rest/v1/monitoring?user_id=eq." + studentId + "&select=*";
-        Request request = new Request.Builder()
-                .url(url)
-                .addHeader("apikey", SupabaseConfig.API_KEY)
-                .addHeader("Authorization", "Bearer " + adminToken)
-                .get()
-                .build();
-
-        client.newCall(request).enqueue(new Callback() {
-            @Override
-            public void onResponse(Call call, Response response) throws IOException {
-                if (response.isSuccessful()) {
-                    MonitoringRecord[] records = new Gson().fromJson(response.body().string(), MonitoringRecord[].class);
-                    if (records != null && records.length > 0) {
-                        runOnUiThread(() -> {
-                            for (MonitoringRecord r : records) {
-                                LatLng pos = new LatLng(r.latitude, r.longitude);
-                                mMap.addMarker(new MarkerOptions().position(pos).title("Point de passage"));
-                            }
-                            MonitoringRecord last = records[records.length - 1];
-                            tvAddress.setText("Dernière adresse : " + last.address);
-                            mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(
-                                    new LatLng(last.latitude, last.longitude), 15f));
-                        });
-                    }
-                }
-            }
-            @Override public void onFailure(Call call, IOException e) { Log.e("MAP", "Erreur GPS", e); }
-        });
-    }*/
     private void loadAllData() {
         String url = SupabaseConfig.FASTAPI_URL + "/admin/monitoring/" + studentId;
         Log.d("DEBUG_API", "Appel FastAPI : " + url);
@@ -235,6 +183,34 @@ public class MonitoringActivity extends AppCompatActivity implements OnMapReadyC
                             Log.e("DEBUG_API", "La liste 'sessions' est NULL dans l'objet data.");
                         }
 
+                        Log.d("DEBUG_FRAUDE", "is_cheating: " + (data.student_info != null ? data.student_info.is_cheating : "null"));
+
+                        // Affichage des détails de fraude dans l'en-tête ou une section dédiée
+                        if (data.student_info != null && data.student_info.is_cheating) {
+                            // --- ÉTAT : FRAUDE DÉTECTÉE ---
+                            cardFraud.setCardBackgroundColor(Color.parseColor("#FEEBEE")); // Rouge clair
+                            tvFraudStatus.setText("⚠️ FRAUDE DÉTECTÉE");
+                            tvFraudStatus.setTextColor(Color.parseColor("#C62828"));
+
+                            tvFraudReason.setVisibility(View.VISIBLE);
+                            tvFraudReason.setText("Raison : " + data.student_info.fraud_reason);
+                            tvFraudReason.setTextColor(Color.parseColor("#C62828"));
+
+                            tvFraudDate.setVisibility(View.VISIBLE);
+                            tvFraudDate.setText("Détecté le : " + data.student_info.last_fraud_detected_at);
+                            tvFraudDate.setTextColor(Color.parseColor("#C62828"));
+
+                        } else {
+                            // --- ÉTAT : AUCUNE FRAUDE (ou réinitialisé) ---
+                            cardFraud.setCardBackgroundColor(Color.parseColor("#E8F5E9")); // Vert clair
+                            tvFraudStatus.setText("✅ AUCUNE FRAUDE DÉTECTÉE");
+                            tvFraudStatus.setTextColor(Color.parseColor("#2E7D32"));
+
+                            // On cache les détails inutiles en cas de succès
+                            tvFraudReason.setVisibility(View.GONE);
+                            tvFraudDate.setVisibility(View.GONE);
+                        }
+
                         // Notification des changements
                         Log.d("DEBUG_API", "Mise à jour des adapters (Sessions: " + sessionList.size() + ")");
                         sessionAdapter.notifyDataSetChanged();
@@ -269,63 +245,6 @@ public class MonitoringActivity extends AppCompatActivity implements OnMapReadyC
     }
 
     // --- PARTIE AUDIO ---
-
-    /*private void fetchUserAudios() {
-        String listUrl = SupabaseConfig.BASE_URL + "/storage/v1/object/list/monitoring";
-        String jsonBody = "{\"prefix\": \"" + studentId + "/\"}";
-
-        okhttp3.RequestBody body = okhttp3.RequestBody.create(okhttp3.MediaType.parse("application/json"), jsonBody);
-        Request request = new Request.Builder().url(listUrl).addHeader("apikey", SupabaseConfig.API_KEY).addHeader("Authorization", "Bearer " + adminToken).post(body).build();
-
-        client.newCall(request).enqueue(new Callback() {
-            @Override
-            public void onResponse(Call call, Response response) throws IOException {
-                if (response.isSuccessful()) {
-                    StorageFile[] sessions = new Gson().fromJson(response.body().string(), StorageFile[].class);
-                    if (sessions != null) {
-                        runOnUiThread(() -> audioUrls.clear());
-                        for (StorageFile session : sessions) {
-                            if (session.id == null && !session.name.equals(".emptyFolderPlaceholder")) {
-                                fetchAudioInSpecificFolder(session.name);
-                            }
-                        }
-                    }
-                }
-            }
-            @Override public void onFailure(Call call, IOException e) { Log.e("AUDIO", "Fail sessions", e); }
-        });
-    }*/
-
-    /*private void fetchAudioInSpecificFolder(String sessionFolderName) {
-        String fullAudioPath = studentId + "/" + sessionFolderName + "/audios/";
-        String jsonBody = "{\"prefix\": \"" + fullAudioPath + "\"}";
-        okhttp3.RequestBody body = okhttp3.RequestBody.create(okhttp3.MediaType.parse("application/json"), jsonBody);
-        Request request = new Request.Builder().url(SupabaseConfig.BASE_URL + "/storage/v1/object/list/monitoring").addHeader("apikey", SupabaseConfig.API_KEY).addHeader("Authorization", "Bearer " + adminToken).post(body).build();
-
-        client.newCall(request).enqueue(new Callback() {
-            @Override
-            public void onResponse(Call call, Response response) throws IOException {
-                if (response.isSuccessful()) {
-                    StorageFile[] files = new Gson().fromJson(response.body().string(), StorageFile[].class);
-                    if (files != null) {
-                        String authBaseUrl = SupabaseConfig.BASE_URL + "/storage/v1/object/authenticated/monitoring/";
-                        for (StorageFile file : files) {
-                            if (file.id != null && file.name.contains("full_session")) {
-                                String finalUrl = authBaseUrl + fullAudioPath + file.name;
-                                runOnUiThread(() -> {
-                                    if (!audioUrls.contains(finalUrl)) {
-                                        audioUrls.add(finalUrl);
-                                        audioAdapter.notifyDataSetChanged();
-                                    }
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-            @Override public void onFailure(Call call, IOException e) { e.printStackTrace(); }
-        });
-    }*/
 
     public void playAudio(String url, SeekBar seekBar, Button btnSpeed, ImageButton btnPlay) {
         // 1. GESTION PAUSE/REPRISE (Si c'est le même audio)
@@ -458,5 +377,62 @@ public class MonitoringActivity extends AppCompatActivity implements OnMapReadyC
         } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
             Log.w("AUDIO", "Le changement de vitesse nécessite Android 6.0 (Marshmallow) ou plus.");
         }
+    }
+    private void resetFraudStatus(String studentId) {
+        // 1. URL de ton endpoint FastAPI (celui qu'on a créé ensemble)
+        String url = SupabaseConfig.FASTAPI_URL + "/admin/reset-fraud/" + studentId;
+
+        // 2. Préparation de la requête POST (ou PATCH selon ton backend)
+        // On utilise un RequestBody vide car les paramètres sont dans l'URL
+        okhttp3.RequestBody emptyBody = okhttp3.RequestBody.create(null, new byte[0]);
+
+        Request request = new Request.Builder()
+                .url(url)
+                .addHeader("Authorization", "Bearer " + adminToken)
+                .post(emptyBody)
+                .build();
+
+        Log.d("DEBUG_FRAUDE", "Tentative de réinitialisation pour : " + studentId);
+
+        // 3. Appel asynchrone
+        client.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                if (response.isSuccessful()) {
+                    runOnUiThread(() -> {
+                        // --- MISE À JOUR VISUELLE IMMÉDIATE ---
+                        // On repasse la carte en mode "Succès"
+                        cardFraud.setCardBackgroundColor(Color.parseColor("#E8F5E9")); // Vert clair
+                        tvFraudStatus.setText("✅ ACCÈS RÉTABLI (Repassage autorisé)");
+                        tvFraudStatus.setTextColor(Color.parseColor("#2E7D32"));
+
+                        // On cache les détails de l'ancienne fraude
+                        tvFraudReason.setVisibility(View.GONE);
+                        tvFraudDate.setVisibility(View.GONE);
+
+                        // On désactive le bouton pour éviter les doubles clics
+                        btnResetFraud.setEnabled(false);
+                        btnResetFraud.setAlpha(0.5f);
+
+                        Toast.makeText(MonitoringActivity.this,
+                                "L'étudiant peut maintenant repasser son quiz.",
+                                Toast.LENGTH_LONG).show();
+                    });
+                } else {
+                    Log.e("DEBUG_FRAUDE", "Erreur serveur : " + response.code());
+                    runOnUiThread(() ->
+                            Toast.makeText(MonitoringActivity.this, "Erreur lors de la réinitialisation", Toast.LENGTH_SHORT).show()
+                    );
+                }
+            }
+
+            @Override
+            public void onFailure(Call call, IOException e) {
+                Log.e("DEBUG_FRAUDE", "Échec réseau : " + e.getMessage());
+                runOnUiThread(() ->
+                        Toast.makeText(MonitoringActivity.this, "Connexion impossible au serveur", Toast.LENGTH_SHORT).show()
+                );
+            }
+        });
     }
 }

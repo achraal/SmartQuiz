@@ -77,6 +77,12 @@ public class AdminActivity extends AppCompatActivity {
             finish();
         });
     }
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // Dès que tu reviens du Monitoring, cette fonction s'exécute
+        loadStudents();
+    }
 
     private void initFormViews() {
         etQuestion = findViewById(R.id.etQuestion);

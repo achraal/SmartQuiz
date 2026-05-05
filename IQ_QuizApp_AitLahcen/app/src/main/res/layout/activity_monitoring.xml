@@ -3,6 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    xmlns:tools="http://schemas.android.com/tools"
     android:fillViewport="true"
     android:background="#F5F5F5">
 
@@ -11,6 +12,7 @@
         android:layout_height="wrap_content"
         android:orientation="vertical">
 
+        <!-- Carte Google Maps -->
         <fragment
             android:id="@+id/map"
             android:name="com.google.android.gms.maps.SupportMapFragment"
@@ -40,6 +42,58 @@
                 android:textColor="#666"
                 android:layout_marginBottom="20dp"/>
 
+            <!-- SECTION FRAUDE : Bien isolée dans sa propre CardView -->
+            <androidx.cardview.widget.CardView
+                android:id="@+id/cardFraud"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="20dp"
+                app:cardCornerRadius="8dp"
+                android:visibility="visible"> <!-- On la laisse visible par défaut -->
+
+                <LinearLayout
+                    android:id="@+id/layoutFraudContainer"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="12dp">
+
+                    <TextView
+                        android:id="@+id/tvFraudStatus"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Statut"
+                        android:textStyle="bold"
+                        android:textSize="16sp" />
+
+                    <TextView
+                        android:id="@+id/tvFraudReason"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Raison : N/A"
+                        android:layout_marginTop="4dp" />
+
+                    <TextView
+                        android:id="@+id/tvFraudDate"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Date : N/A"
+                        android:textSize="12sp"
+                        android:layout_marginTop="2dp" />
+                    <Button
+                        android:id="@+id/btnResetFraud"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:layout_gravity="end"
+                        android:text="Autoriser Repassage"
+                        android:textSize="12sp"
+                        style="@style/Widget.MaterialComponents.Button.TextButton"
+                        android:textColor="@android:color/holo_red_dark" />
+                </LinearLayout>
+            </androidx.cardview.widget.CardView>
+
+            <!-- SECTION PHOTOS -->
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
@@ -56,6 +110,7 @@
                 android:minHeight="200dp"
                 android:nestedScrollingEnabled="false" />
 
+            <!-- SECTION AUDIO -->
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"

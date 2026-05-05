@@ -6,4 +6,12 @@ import java.util.List;
 public class MonitoringFullResponse {
     public List<MonitoringRecord> gps_points;
     public List<SessionData> sessions;
+
+    public StudentInfo student_info;
+
+    public static class StudentInfo {
+        public boolean is_cheating;
+        public String fraud_reason;
+        public String last_fraud_detected_at;
+    }
 }

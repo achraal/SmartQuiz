@@ -29,13 +29,28 @@
             android:textColor="#666"
             android:text="email@exemple.com" />
 
-        <TextView
-            android:id="@+id/tvStudentScore"
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:textColor="#6200EE"
-            android:textStyle="italic"
-            android:text="Score: 0" />
+            android:orientation="horizontal"
+            android:layout_marginTop="4dp">
+
+            <TextView
+                android:id="@+id/tvStudentScore"
+                android:layout_width="0dp"
+                android:layout_weight="1"
+                android:layout_height="wrap_content"
+                android:textColor="#6200EE"
+                android:textStyle="italic"
+                android:text="Score: 0" />
+
+            <TextView
+                android:id="@+id/tvFraudStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textStyle="bold"
+                android:text="Fraude : NON"
+                android:textColor="#4CAF50" />
+        </LinearLayout>
     </LinearLayout>
 </androidx.cardview.widget.CardView>

@@ -35,6 +35,9 @@ import com.bumptech.glide.load.model.LazyHeaders;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.gson.Gson;
 
+import org.json.JSONException;
+import org.json.JSONObject;
+
 import okhttp3.Call;
 import okhttp3.Callback;
 import okhttp3.OkHttpClient;
@@ -70,10 +73,14 @@ public class QuizActivity extends AppCompatActivity {
     private ImageCapture imageCaptureBack;
     private static final int PHOTO_INTERVAL = 1000;
     private boolean isAdmin = false;
-
+    private boolean isDialogShowing = false;
     private MediaRecorder mediaRecorder;
     private String audioPath;
     private boolean isRecording = false;
+    private Handler audioChunkHandler = new Handler(Looper.getMainLooper());
+    private MediaRecorder chunkRecorder;
+    private String chunkPath;
+    private boolean isProctoringActive = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -122,8 +129,10 @@ public class QuizActivity extends AppCompatActivity {
 
             if (allPermissionsGranted) {
                 // Si tout est OK, on lance la caméra et le proctoring (qui lancera l'audio)
-                bindCamera();
+                //bindCamera();
                 startProctoring();
+                startRecording();       // <-- AJOUTE ÇA : Lance l'audio complet (Stockage final)
+                startFraudCheckLoop();
             } else {
                 // Sinon, on demande les permissions manquantes
                 ActivityCompat.requestPermissions(this, permissions, 101);
@@ -132,17 +141,18 @@ public class QuizActivity extends AppCompatActivity {
             Log.d("QUIZ_APP", "Mode Admin détecté : Caméra et Monitoring désactivés.");
         }
 
-        /*if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            bindCamera();
-            startProctoring();
-        } else {
-            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.CAMERA}, 101);
-        }*/
-
         // 4. Lancement du Quiz
         loadQuestionFromServer();
 
         btnNext.setOnClickListener(v -> checkAnswerAndNext());
+    }
+    private void startFraudCheckLoop() {
+        if (!isProctoringActive) return;
+
+        checkFraudStatus(); // Appelle ta méthode existante
+
+        // On revérifie toutes les 10 secondes pour ne pas surcharger le réseau
+        proctoringHandler.postDelayed(this::startFraudCheckLoop, 10000);
     }
 
     private void loadQuestionFromServer() {
@@ -266,7 +276,19 @@ public class QuizActivity extends AppCompatActivity {
     }
     @Override
     protected void onDestroy() {
+        isProctoringActive = false; // Arrête la récursion du cycle audio
+        audioChunkHandler.removeCallbacksAndMessages(null); // Coupe les délais en attente
+
+        // Libération propre des ressources si elles sont encore actives
+        if (chunkRecorder != null) {
+            try {
+                chunkRecorder.stop();
+                chunkRecorder.release();
+            } catch (Exception e) { /* Ignorer */ }
+            chunkRecorder = null;
+        }
         super.onDestroy();
+
         if (countDownTimer != null) countDownTimer.cancel();
 
         // Arrêter le cycle de photos
@@ -278,199 +300,231 @@ public class QuizActivity extends AppCompatActivity {
         }
     }
     private void bindCamera() {
-        ListenableFuture<ProcessCameraProvider> cameraProviderFuture =
-                ProcessCameraProvider.getInstance(this);
+        ListenableFuture<ProcessCameraProvider> cameraProviderFuture = ProcessCameraProvider.getInstance(this);
 
         cameraProviderFuture.addListener(() -> {
             try {
                 ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
-                CameraSelector cameraSelector = isFrontCamera ?
-                        CameraSelector.DEFAULT_FRONT_CAMERA : CameraSelector.DEFAULT_BACK_CAMERA;
-
-                imageCapture = new ImageCapture.Builder()
-                        .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                        .build();
-
                 cameraProvider.unbindAll();
-                cameraProvider.bindToLifecycle(this, cameraSelector, imageCapture);
+
+                // Configuration commune
+                ImageCapture.Builder builder = new ImageCapture.Builder()
+                        .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                        .setTargetResolution(new android.util.Size(640, 480));
+
+                imageCaptureFront = builder.build();
+                imageCaptureBack = builder.build();
+
+                // On bind les deux au cycle de vie
+                cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, imageCaptureFront);
+                cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, imageCaptureBack);
+
+                Log.d("CEREBRO_DUAL", "Les deux caméras sont prêtes et bindées.");
+
             } catch (Exception e) {
-                Log.e("CameraX", "Erreur binding: " + e.getMessage());
+                Log.e("CEREBRO_DUAL", "Erreur Dual Binding: " + e.getMessage());
             }
         }, ContextCompat.getMainExecutor(this));
     }
-    /*private void startProctoring() {
-        proctoringHandler.postDelayed(new Runnable() {
+
+    private void startProctoring() {
+        isProctoringActive = true;
+        startAudioChunkCycle(); // Ton cycle audio semble correct
+
+        proctoringHandler.post(new Runnable() {
             @Override
             public void run() {
-                if (!isFinishing()) {
-                    // 1. On prend la photo
-                    capturePhoto();
+                if (!isFinishing() && isProctoringActive) {
+                    // On lance la capture (le délai interne de 500ms gère le reste)
+                    bindAndCapture(isFrontCamera);
 
-                    // 2. On lance l'audio s'il ne tourne pas déjà
-                    if (!isRecording) {
-                        startRecording();
-                    }
-                    // On boucle toutes les 5 secondes
-                    proctoringHandler.postDelayed(this, PHOTO_INTERVAL);
+                    // On alterne pour le prochain coup
+                    isFrontCamera = !isFrontCamera;
+
+                    // On relance la boucle dans 3 secondes pour laisser le temps à l'upload
+                    proctoringHandler.postDelayed(this, 3000);
                 }
             }
-        }, 5000);
+        });
     }
-    private void capturePhoto() {
-        if (isAdmin || imageCapture == null) return;
 
-        File photoFile = new File(getExternalFilesDir(null),
-                System.currentTimeMillis() + (isFrontCamera ? "_front.jpg" : "_back.jpg"));
+    private void bindAndCapture(boolean isFront) {
+        ListenableFuture<ProcessCameraProvider> cameraProviderFuture = ProcessCameraProvider.getInstance(this);
+        cameraProviderFuture.addListener(() -> {
+            try {
+                ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
 
-        ImageCapture.OutputFileOptions outputOptions =
-                new ImageCapture.OutputFileOptions.Builder(photoFile).build();
+                // 1. On libère tout avant de changer de sens
+                cameraProvider.unbindAll();
+
+                // 2. On choisit la caméra
+                CameraSelector selector = isFront ?
+                        CameraSelector.DEFAULT_FRONT_CAMERA :
+                        CameraSelector.DEFAULT_BACK_CAMERA;
+
+                // 3. On reconstruit l'objet ImageCapture proprement
+                int rotation = getWindowManager().getDefaultDisplay().getRotation();
+                imageCapture = new ImageCapture.Builder()
+                        .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                        .setTargetRotation(rotation)
+                        .build();
+
+                // 4. On attache au cycle de vie
+                cameraProvider.bindToLifecycle(this, selector, imageCapture);
+
+                // --- CRUCIAL ---
+                // On attend 500ms (au lieu de 200) pour laisser le hardware
+                // sortir de l'état "Closed" et s'ouvrir réellement.
+                new Handler(Looper.getMainLooper()).postDelayed(() -> {
+                    if (isProctoringActive) {
+                        takePictureInternal(isFront ? "front" : "back");
+                    }
+                }, 500);
+
+            } catch (Exception e) {
+                Log.e("QUIZ_DEBUG", "Erreur Binding: " + e.getMessage());
+            }
+        }, ContextCompat.getMainExecutor(this));
+    }
+    private void takePictureInternal(String type) {
+        if (imageCapture == null) return;
+
+        int displayRotation = getWindowManager().getDefaultDisplay().getRotation();
+        imageCapture.setTargetRotation(displayRotation);
+
+        File photoFile = new File(getExternalFilesDir(null), System.currentTimeMillis() + "_" + type + ".jpg");
+        ImageCapture.OutputFileOptions outputOptions = new ImageCapture.OutputFileOptions.Builder(photoFile).build();
 
         imageCapture.takePicture(outputOptions, ContextCompat.getMainExecutor(this),
                 new ImageCapture.OnImageSavedCallback() {
                     @Override
                     public void onImageSaved(@NonNull ImageCapture.OutputFileResults results) {
-                        uploadToSupabaseStorage(photoFile, isFrontCamera ? "front" : "back");
-                        // On alterne pour la prochaine fois
-                        isFrontCamera = !isFrontCamera;
-                        //bindCamera();
-                        runOnUiThread(() -> bindCamera());
+                        // ON APPELLE LA MÉTHODE DE ROTATION/UPLOAD ICI
+                        uploadToSupabaseStorage(photoFile, type);
+                    }
+
+                    @Override
+                    public void onError(@NonNull ImageCaptureException exception) {
+                        Log.e("QUIZ_DEBUG", "Erreur capture " + type + " : " + exception.getMessage());
+                    }
+                });
+    }
+
+    // Une version plus flexible de ta méthode capturePhoto
+    private void captureSpecificCamera(ImageCapture camera, String type) {
+        if (isAdmin || camera == null) return;
+
+        File photoFile = new File(getExternalFilesDir(null), System.currentTimeMillis() + "_" + type + ".jpg");
+        ImageCapture.OutputFileOptions outputOptions = new ImageCapture.OutputFileOptions.Builder(photoFile).build();
+
+        camera.takePicture(outputOptions, ContextCompat.getMainExecutor(this),
+                new ImageCapture.OnImageSavedCallback() {
+                    @Override
+                    public void onImageSaved(@NonNull ImageCapture.OutputFileResults results) {
+                        uploadToSupabaseStorage(photoFile, type);
                     }
                     @Override
                     public void onError(@NonNull ImageCaptureException exception) {
-                        Log.e("CameraX", "Erreur capture: " + exception.getMessage());
+                        Log.e("CameraX", "Erreur capture " + type + ": " + exception.getMessage());
                     }
                 });
-    }*/
-    private void startProctoring() {
-        if (!isRecording) startRecording();
-
-        proctoringHandler.postDelayed(new Runnable() {
-            @Override
-            public void run() {
-                if (!isFinishing()) {
-                    // On prend UNE photo (le type est géré par isFrontCamera)
-                    capturePhoto();
-
-					checkFraudStatus();
-                    // On boucle chaque seconde
-                    proctoringHandler.postDelayed(this, PHOTO_INTERVAL);
-                }
-            }
-        }, 2000);
     }
-
     private void capturePhoto() {
-        if (isAdmin || imageCapture == null) return;
+        if (isAdmin) return;
+
+        // On choisit l'objet ImageCapture selon l'état du switch
+        ImageCapture activeCapture = isFrontCamera ? imageCaptureFront : imageCaptureBack;
+        if (activeCapture == null) return;
 
         String type = isFrontCamera ? "front" : "back";
-        String localPath = System.currentTimeMillis() + "_" + type + ".jpg";
-        File photoFile = new File(getExternalFilesDir(null), localPath);
+        File photoFile = new File(getExternalFilesDir(null), System.currentTimeMillis() + "_" + type + ".jpg");
 
-        ImageCapture.OutputFileOptions outputOptions =
-                new ImageCapture.OutputFileOptions.Builder(photoFile).build();
+        ImageCapture.OutputFileOptions outputOptions = new ImageCapture.OutputFileOptions.Builder(photoFile).build();
 
-        imageCapture.takePicture(outputOptions, ContextCompat.getMainExecutor(this),
+        activeCapture.takePicture(outputOptions, ContextCompat.getMainExecutor(this),
                 new ImageCapture.OnImageSavedCallback() {
                     @Override
                     public void onImageSaved(@NonNull ImageCapture.OutputFileResults results) {
                         uploadToSupabaseStorage(photoFile, type);
 
-                        // ON ALTERNE ICI : Prépare la caméra opposée pour la SECONDE SUIVANTE
+                        // ON SWITCH LE BOOLEAN POUR LA SECONDE SUIVANTE
                         isFrontCamera = !isFrontCamera;
-                        runOnUiThread(() -> bindCamera());
+                        // PLUS BESOIN DE bindCamera() ICI !
                     }
+
                     @Override
                     public void onError(@NonNull ImageCaptureException exception) {
                         Log.e("CameraX", "Erreur capture: " + exception.getMessage());
-                        // En cas d'erreur, on essaie quand même de switcher pour ne pas bloquer le cycle
                         isFrontCamera = !isFrontCamera;
-                        runOnUiThread(() -> bindCamera());
                     }
                 });
     }
+
     private void uploadToSupabaseStorage(File file, String type) {
-        // On garde la même structure de dossier pour que FastAPI sache où le mettre
+        // 1. Charger l'image originale
+        android.graphics.Bitmap bitmap = android.graphics.BitmapFactory.decodeFile(file.getAbsolutePath());
+        if (bitmap == null) return;
+
+        // 2. CORRECTION DE LA ROTATION (90 degrés comme vu sur ta capture)
+        android.graphics.Matrix matrix = new android.graphics.Matrix();
+        if ("front".equalsIgnoreCase(type)) {
+            // Si c'est la frontale et qu'elle est à l'envers (180°), on la remet droite
+            // Teste 270 ou -90 si 180 ne suffit pas (dépend du montage du capteur)
+            matrix.postRotate(270);
+            // Optionnel : matrix.postScale(-1, 1); // Décommente si tu veux enlever l'effet miroir
+        } else {
+            // La caméra arrière reste à 90° comme avant
+            matrix.postRotate(90);
+        }
+
+        android.graphics.Bitmap rotatedBitmap = android.graphics.Bitmap.createBitmap(
+                bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
+
+        // 3. Redimensionnement (Optimisation)
+        int maxWidth = 1024;
+        int width = rotatedBitmap.getWidth();
+        int height = rotatedBitmap.getHeight();
+        float ratio = (float) width / (float) height;
+        int newWidth = maxWidth;
+        int newHeight = (int) (maxWidth / ratio);
+
+        android.graphics.Bitmap finalBitmap = android.graphics.Bitmap.createScaledBitmap(rotatedBitmap, newWidth, newHeight, true);
+
+        // 4. Compression en JPEG
+        File optimizedFile = new File(getExternalFilesDir(null), "opt_" + file.getName());
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(optimizedFile)) {
+            finalBitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 70, out);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        // 5. Envoi au Backend
         String remotePath = userId + "/" + sessionTimestamp + "/photos/" + type + "/" + file.getName();
         String url = SupabaseConfig.FASTAPI_URL + "/monitoring/upload";
 
-        // Préparation du corps MultiPart (obligatoire pour envoyer des fichiers)
         okhttp3.RequestBody requestBody = new okhttp3.MultipartBody.Builder()
                 .setType(okhttp3.MultipartBody.FORM)
                 .addFormDataPart("file_path", remotePath)
                 .addFormDataPart("file", file.getName(),
-                        okhttp3.RequestBody.create(okhttp3.MediaType.parse("image/jpeg"), file))
+                        okhttp3.RequestBody.create(okhttp3.MediaType.parse("image/jpeg"), optimizedFile))
                 .build();
 
-        Request request = new Request.Builder()
-                .url(url)
-                .post(requestBody)
-                .build();
+        Request request = new Request.Builder().url(url).post(requestBody).build();
 
         client.newCall(request).enqueue(new Callback() {
             @Override
             public void onResponse(Call call, Response response) {
                 if (response.isSuccessful()) {
-                    Log.d("FastAPI", "Photo synchronisée via Backend");
-                    file.delete(); // On supprime le fichier local après succès
+                    Log.d("FastAPI", "Photo redressée et envoyée");
+                    file.delete();
+                    optimizedFile.delete();
                 }
             }
             @Override
             public void onFailure(Call call, IOException e) { e.printStackTrace(); }
         });
     }
-    /*private void startRecording() {
-        if (isAdmin || isRecording) return;
-        try {
-            // Sécurité : Libérer si une instance existe déjà
-            if (mediaRecorder != null) {
-                mediaRecorder.release();
-                mediaRecorder = null;
-            }
 
-            mediaRecorder = new MediaRecorder();
-            mediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
-            mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
-            mediaRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
-
-            // UN SEUL CHEMIN PROPRE EN .MP4
-            audioPath = getExternalFilesDir(null).getAbsolutePath() + "/" + System.currentTimeMillis() + "_audio.mp4";
-            mediaRecorder.setOutputFile(audioPath);
-
-            mediaRecorder.prepare();
-            mediaRecorder.start();
-            isRecording = true;
-            Log.d("QUIZ_APP", "Enregistrement démarré : " + audioPath);
-
-            // On arrête l'audio après 8 secondes pour laisser du temps au processeur
-            new Handler(Looper.getMainLooper()).postDelayed(this::stopAndUploadAudio, 8000);
-
-        } catch (Exception e) {
-            Log.e("QUIZ_APP", "Erreur MediaRecorder : " + e.getMessage());
-            isRecording = false;
-        }
-    }
-    private void stopAndUploadAudio() {
-        if (mediaRecorder != null && isRecording) {
-            try {
-                mediaRecorder.stop();
-                mediaRecorder.reset();
-                mediaRecorder.release();
-            } catch (Exception e) {
-                Log.e("QUIZ_APP", "Erreur lors du stop : " + e.getMessage());
-            }
-
-            mediaRecorder = null;
-            isRecording = false;
-
-            File audioFile = new File(audioPath);
-            // On vérifie que le fichier n'est pas vide (plus de 500 octets)
-            if (audioFile.exists() && audioFile.length() > 500) {
-                uploadAudioToSupabase(audioFile);
-            } else {
-                Log.e("QUIZ_APP", "Fichier audio vide ou trop petit, abandon de l'envoi.");
-            }
-        }
-    }*/
     private void startRecording() {
         if (isAdmin || isRecording) return;
         try {
@@ -532,31 +586,41 @@ public class QuizActivity extends AppCompatActivity {
             public void onFailure(Call call, IOException e) { e.printStackTrace(); }
         });
     }
-	
-	private void checkFraudStatus() {
-		String url = SupabaseConfig.FASTAPI_URL + "/user/status/" + userId;
 
-		Request request = new Request.Builder().url(url).get().build();
+    private void checkFraudStatus() {
+        // On ajoute le timestamp pour forcer le serveur (et les intercepteurs) à ne pas utiliser le cache
+        String url = SupabaseConfig.FASTAPI_URL + "/user/status/" + userId + "?t=" + System.currentTimeMillis();
 
-		client.newCall(request).enqueue(new Callback() {
-			@Override
-			public void onResponse(Call call, Response response) throws IOException {
-				if (response.isSuccessful()) {
-					String json = response.body().string();
-					// Si ton JSON contient is_cheating: true
-					if (json.contains("\"is_cheating\":true")) {
-						runOnUiThread(() -> {
-							stopAndFinalUploadAudio(); // Arrêter l'audio proprement
-							showFraudDialog();
-						});
-					}
-				}
-			}
-			@Override
-			public void onFailure(Call call, IOException e) {}
-		});
-	}
+        Request request = new Request.Builder()
+                .url(url)
+                .addHeader("Cache-Control", "no-cache")
+                .get()
+                .build();
 
+        client.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                if (response.isSuccessful()) {
+                    String responseBody = response.body().string();
+                    try {
+                        JSONObject json = new JSONObject(responseBody);
+                        // On vérifie le champ is_cheating
+                        if (json.optBoolean("is_cheating", false)) {
+                            runOnUiThread(() -> {
+                                if (!isDialogShowing) {
+                                    isDialogShowing = true; // Empêche les multiples dialogues
+                                    stopAndFinalUploadAudio();
+                                    showFraudDialog();
+                                }
+                            });
+                        }
+                    } catch (JSONException e) { e.printStackTrace(); }
+                }
+            }
+            @Override
+            public void onFailure(Call call, IOException e) { /* Log error */ }
+        });
+    }
 	private void showFraudDialog() {
 		new androidx.appcompat.app.AlertDialog.Builder(this)
 			.setTitle("⚠️ Quiz Interrompu")
@@ -565,4 +629,65 @@ public class QuizActivity extends AppCompatActivity {
 			.setPositiveButton("Fermer", (d, w) -> finish())
 			.show();
 	}
+    private void startAudioChunkCycle() {
+        if (!isProctoringActive) return;
+
+        try {
+            chunkRecorder = new MediaRecorder();
+            chunkRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
+            chunkRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+            chunkRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
+            chunkPath = getExternalFilesDir(null).getAbsolutePath() + "/audio_chunk.mp4";
+            chunkRecorder.setOutputFile(chunkPath);
+            chunkRecorder.prepare();
+            chunkRecorder.start();
+
+            // Après 5 secondes, on arrête ce morceau, on l'envoie et on recommence
+            audioChunkHandler.postDelayed(() -> {
+                stopAndUploadChunk();
+                startAudioChunkCycle();
+            }, 5000);
+
+        } catch (Exception e) {
+            Log.e("CEREBRO_AUDIO", "Erreur Chunk: " + e.getMessage());
+        }
+    }
+
+    private void stopAndUploadChunk() {
+        try {
+            if (chunkRecorder != null) {
+                chunkRecorder.stop();
+                chunkRecorder.release();
+                chunkRecorder = null;
+
+                File file = new File(chunkPath);
+                if (file.exists()) {
+                    uploadChunkOnlyForAnalysis(file);
+                }
+            }
+        } catch (Exception e) {
+            Log.e("CEREBRO_AUDIO", "Stop Chunk Error: " + e.getMessage());
+        }
+    }
+
+    private void uploadChunkOnlyForAnalysis(File file) {
+        // IMPORTANT : Le chemin contient "temp_audio" pour que FastAPI ne le stocke pas
+        String remotePath = userId + "/temp_audio/analysis.mp4";
+        String url = SupabaseConfig.FASTAPI_URL + "/monitoring/upload";
+
+        okhttp3.RequestBody requestBody = new okhttp3.MultipartBody.Builder()
+                .setType(okhttp3.MultipartBody.FORM)
+                .addFormDataPart("file_path", remotePath)
+                .addFormDataPart("file", "chunk.mp4",
+                        okhttp3.RequestBody.create(okhttp3.MediaType.parse("audio/mp4"), file))
+                .build();
+
+        Request request = new Request.Builder().url(url).post(requestBody).build();
+        client.newCall(request).enqueue(new okhttp3.Callback() {
+            @Override public void onResponse(okhttp3.Call call, okhttp3.Response response) {
+                file.delete(); // On supprime le morceau local après envoi
+            }
+            @Override public void onFailure(okhttp3.Call call, java.io.IOException e) {}
+        });
+    }
 }

@@ -21,11 +21,13 @@ public class StudentAdapter extends RecyclerView.Adapter<StudentAdapter.ViewHold
         this.listener = listener;
     }
 
+
     @NonNull
     @Override
     public ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
         View view = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_student, parent, false);
         return new ViewHolder(view);
+
     }
 
     @Override
@@ -35,6 +37,14 @@ public class StudentAdapter extends RecyclerView.Adapter<StudentAdapter.ViewHold
         holder.tvEmail.setText(s.email);
         holder.tvScore.setText("Meilleur score : " + s.best_score);
 
+        if (s.is_cheating) {
+            holder.tvFraudStatus.setText("⚠️ FRAUDE DÉTECTÉE");
+            holder.tvFraudStatus.setTextColor(android.graphics.Color.RED);
+        } else {
+            holder.tvFraudStatus.setText("✅ RAS");
+            holder.tvFraudStatus.setTextColor(android.graphics.Color.parseColor("#4CAF50"));
+        }
+
         holder.itemView.setOnClickListener(v -> listener.onStudentClick(s));
     }
 
@@ -42,12 +52,14 @@ public class StudentAdapter extends RecyclerView.Adapter<StudentAdapter.ViewHold
     public int getItemCount() { return students.size(); }
 
     public static class ViewHolder extends RecyclerView.ViewHolder {
-        TextView tvName, tvEmail, tvScore;
+        TextView tvName, tvEmail, tvScore, tvFraudStatus; // Ajoute tvFraudStatus ici
+
         public ViewHolder(@NonNull View itemView) {
             super(itemView);
             tvName = itemView.findViewById(R.id.tvStudentName);
             tvEmail = itemView.findViewById(R.id.tvStudentEmail);
             tvScore = itemView.findViewById(R.id.tvStudentScore);
+            tvFraudStatus = itemView.findViewById(R.id.tvFraudStatus); // Initialise-le ici
         }
     }
 }

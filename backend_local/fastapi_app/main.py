@@ -3,99 +3,142 @@ import httpx, os, cv2
 from dotenv import load_dotenv
 from ultralytics import YOLO
 import numpy as np
+from fastapi import BackgroundTasks
+import librosa
+import numpy as np
+import time
+import threading
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+import asyncio
+from redis import Redis
+from rq import Queue
 
 load_dotenv()
 
 app = FastAPI()
+# On crée un verrou pour éviter que YOLO ne crash si deux threads l'utilisent
 
 # Pour ton Supabase local (Docker)
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
+# --- CONNEXION UNIQUE HTTPX (Pour la vitesse) ---
+# On crée un client global pour éviter de recréer des connexions à chaque requête
+http_client = httpx.AsyncClient()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await http_client.aclose()
+
+# Connexion à Redis
+redis_conn = Redis(host='localhost', port=6379)
+q = Queue(connection=redis_conn)
+
+
 @app.get("/check-link")
 async def check_link():
-    # On tente de lister les tables ou simplement de contacter l'endpoint REST
-    # pour voir si Supabase répond avec nos clés
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}"
-    }
-    
-    async with httpx.AsyncClient() as client:
-        try:
-            # On interroge la racine de l'API REST de Supabase
-            response = await client.get(f"{SUPABASE_URL}/rest/v1/", headers=headers)
-            
-            if response.status_code == 200:
-                return {
-                    "status": "Success",
-                    "message": "FastAPI communique parfaitement avec Supabase !",
-                    "supabase_info": response.json()
-                }
-            else:
-                return {
-                    "status": "Error",
-                    "code": response.status_code,
-                    "detail": "Supabase a répondu mais avec une erreur. Vérifie tes clés."
-                }
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Impossible de joindre Supabase: {str(e)}")
-        
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    try:
+        response = await http_client.get(f"{SUPABASE_URL}/rest/v1/", headers=headers)
+        return {"status": "Success", "supabase_info": response.json()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/auth/register")
 async def register_user(user_data: dict):
-    # On relaie vers l'URL de ton Supabase local (Docker)
     url = f"{SUPABASE_URL}/auth/v1/signup"
-    headers = {
-        "apikey": os.getenv("SUPABASE_ANON_KEY"), # On utilise la anon_key pour l'auth
-        "Content-Type": "application/json"
-    }
-    async with httpx.AsyncClient() as client:
-        response = await client.post(url, json=user_data, headers=headers)
-        if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-        return response.json()
+    headers = {"apikey": os.getenv("SUPABASE_ANON_KEY"), "Content-Type": "application/json"}
+    
+    response = await http_client.post(url, json=user_data, headers=headers)
+    
+    if response.status_code != 200:
+        # On récupère le message d'erreur de Supabase (ex: "User already registered")
+        error_detail = response.json().get("msg", "Registration failed")
+        raise HTTPException(status_code=response.status_code, detail=error_detail)
+        
+    return response.json()
 
 @app.post("/auth/login")
 async def login_user(credentials: dict):
     url = f"{SUPABASE_URL}/auth/v1/token?grant_type=password"
-    headers = {
-        "apikey": os.getenv("SUPABASE_ANON_KEY"),
-        "Content-Type": "application/json"
-    }
-    async with httpx.AsyncClient() as client:
-        response = await client.post(url, json=credentials, headers=headers)
-        if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail="Identifiants incorrects")
-        return response.json()
-
+    headers = {"apikey": os.getenv("SUPABASE_ANON_KEY"), "Content-Type": "application/json"}
+    
+    response = await http_client.post(url, json=credentials, headers=headers)
+    
+    if response.status_code != 200:
+        # En cas d'email ou mdp incorrect, Supabase renvoie souvent une erreur 400
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, 
+            detail="Email ou mot de passe incorrect"
+        )
+        
+    return response.json()
 
 @app.get("/quiz/questions/{level}")
 async def get_questions(level: int):
-    # FastAPI récupère les questions pour Android
     url = f"{SUPABASE_URL}/rest/v1/quizzes?level_number=eq.{level}"
     headers = {"apikey": os.getenv("SUPABASE_ANON_KEY")}
-    
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, headers=headers)
-        return response.json()
+    response = await http_client.get(url, headers=headers)
+    return response.json()
 
 @app.post("/quiz/submit")
 async def submit_quiz(data: dict):
-    # Ici, FastAPI peut valider le score avant de l'enregistrer avec la SECRET_KEY
     user_id = data.get("user_id")
     score = data.get("score")
-    
     url = f"{SUPABASE_URL}/rest/v1/profiles?id=eq.{user_id}"
-    headers = {
-        "apikey": SUPABASE_KEY, # Secret Key
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": "application/json"
-    }
-    
-    async with httpx.AsyncClient() as client:
-        await client.patch(url, json={"best_score": score}, headers=headers)
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}", "Content-Type": "application/json"}
+    await http_client.patch(url, json={"best_score": score}, headers=headers)
     return {"status": "Score synchronisé"}
+
+# --- LA PARTIE QUI CHANGE : MONITORING LÉGER ---
+
+@app.post("/monitoring/upload")
+async def upload_monitoring_file(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    file_path: str = Form(...) 
+):
+    file_content = await file.read()
+    u_id = file_path.split('/')[0]
+
+    # OPTIMISATION : On délègue tout au WORKER via Redis
+    if "photos" in file_path.lower():
+        # On envoie la tâche à Redis, le worker s'en occupe
+        from worker import analyze_photo_task # Import local pour éviter les soucis
+        q.enqueue(analyze_photo_task, file_content, u_id)
+
+    if "audios" in file_path.lower() or "temp_audio" in file_path.lower():
+        if len(file_content) > 1000:
+            from worker import analyze_audio_task
+            q.enqueue(analyze_audio_task, file_content, u_id)
+
+    # Le stockage reste en background task car c'est juste du transfert réseau
+    if "temp_audio" not in file_path.lower():
+        background_tasks.add_task(upload_to_supabase_storage, file_content, file_path, file.content_type)
+
+    return {"status": "ok"}
+
+# --- FONCTIONS UTILITAIRES ---
+
+async def upload_to_supabase_storage(content, path, content_type):
+    url = f"{SUPABASE_URL}/storage/v1/object/monitoring/{path}"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": content_type
+    }
+    await http_client.post(url, content=content, headers=headers)
+
+@app.get("/user/status/{user_id}")
+async def get_user_status(user_id: str):
+    url = f"{SUPABASE_URL}/rest/v1/profiles?id=eq.{user_id}&select=is_cheating,fraud_reason"
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    response = await http_client.get(url, headers=headers)
+    data = response.json()
+    return data[0] if data else {"is_cheating": False, "fraud_reason": None, "last_fraud_detected_at": None}
+       
 
 @app.post("/monitoring/location")
 async def save_location(data: dict):
@@ -117,105 +160,7 @@ import numpy as np
 import httpx
 from fastapi import UploadFile, File, Form
 
-# Chargement du modèle au démarrage 
-fraud_model = YOLO('yolov8n.pt') 
-
-@app.post("/monitoring/upload")
-async def upload_monitoring_file(
-    file: UploadFile = File(...),
-    file_path: str = Form(...) 
-):
-    # 1. Lecture du contenu
-    file_content = await file.read()
-    
-    # --- DÉBUT ANALYSE IA ---
-    # On n'analyse que les photos venant de la caméra frontale pour ne pas surcharger le CPU
-    if "photos/front" in file_path:
-        # Conversion du binaire en image utilisable par OpenCV/YOLO
-        nparr = np.frombuffer(file_content, np.uint8)
-        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
-        # Inférence YOLO (on cherche les classes 0: person, 67: cell phone, 73: book)
-        results = fraud_model(img, conf=0.4, verbose=False)
-        
-        fraud_detected = False
-        reasons = []
-
-        for r in results:
-            # Détection de plusieurs personnes
-            person_count = (r.boxes.cls == 0).sum()
-            if person_count > 1:
-                fraud_detected = True
-                reasons.append(f"{int(person_count)} personnes détectées")
-
-            # Détection d'objets (téléphone, livre, laptop)
-            for box in r.boxes:
-                label = fraud_model.names[int(box.cls[0])]
-                if label in ["cell phone", "book", "laptop"]:
-                    fraud_detected = True
-                    reasons.append(f"Objet interdit : {label}")
-
-        if fraud_detected:
-            # Extraire le userId depuis le file_path (format: "userId/timestamp/...")
-            user_id = file_path.split('/')[0]
-            
-            # Mise à jour du statut dans Supabase via REST API
-            async with httpx.AsyncClient() as client:
-                await client.patch(
-                    f"{SUPABASE_URL}/rest/v1/profiles?id=eq.{user_id}",
-                    json={
-                        "is_cheating": True, 
-                        "fraud_reason": ", ".join(reasons)
-                    },
-                    headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
-                )
-    # --- FIN ANALYSE IA ---
-
-    # 2. Ton code de stockage habituel vers Supabase Storage
-    url = f"{SUPABASE_URL}/storage/v1/object/monitoring/{file_path}"
-    headers = {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
-        "Content-Type": file.content_type
-    }
-
-
-    async with httpx.AsyncClient() as client:
-        response = await client.post(url, content=file_content, headers=headers)
-        #return {"status": "processed", "storage_resp": response.status_code}
-        
-        if response.status_code != 200:
-            raise HTTPException(status_code=response.status_code, detail="Erreur Storage Supabase")
-
-    return {"status": "success", "path": file_path}
-
-@app.get("/user/status/{user_id}")
-async def get_user_status(user_id: str):
-    """
-    Endpoint interrogé par Android (checkFraudStatus) pour savoir 
-    si l'IA a détecté une triche.
-    """
-    url = f"{SUPABASE_URL}/rest/v1/profiles?id=eq.{user_id}&select=is_cheating,fraud_reason"
-    headers = {
-        "apikey": SUPABASE_KEY, 
-        "Authorization": f"Bearer {SUPABASE_KEY}"
-    }
-    
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(url, headers=headers)
-            data = response.json()
-            
-            # Si on trouve l'utilisateur, on renvoie son état de triche
-            if data and len(data) > 0:
-                return data[0] # Renvoie {"is_cheating": true/false, "fraud_reason": "..."}
-            
-            # Si l'utilisateur n'existe pas encore dans 'profiles'
-            return {"is_cheating": False, "fraud_reason": None}
-            
-        except Exception as e:
-            # En cas d'erreur serveur, on ne bloque pas l'utilisateur par défaut
-            return {"is_cheating": False, "error": str(e)}
+# Chargement du modèle au démarrage  
 
 @app.get("/admin/students")
 async def list_students():
@@ -239,6 +184,12 @@ async def get_full_monitoring(student_id: str):
     base_storage_url = f"{SUPABASE_URL}/storage/v1/object/authenticated/monitoring"
 
     async with httpx.AsyncClient() as client:
+        user_resp = await client.get(
+            f"{SUPABASE_URL}/rest/v1/profiles?id=eq.{student_id}&select=is_cheating,fraud_reason,last_fraud_detected_at",
+            headers=headers
+        )
+        user_data = user_resp.json()
+        student_info = user_data[0] if user_data else None
         # 1. Récupération des points GPS
         gps_resp = await client.get(
             f"{SUPABASE_URL}/rest/v1/monitoring?user_id=eq.{student_id}&select=*", 
@@ -300,10 +251,39 @@ async def get_full_monitoring(student_id: str):
             final_sessions.append(session_entry)
 
         return {
+            "student_info": student_info,
             "gps_points": gps_data,
             "sessions": final_sessions
         }
     
+
+@app.post("/admin/reset-fraud/{student_id}")
+async def reset_student_fraud(student_id: str):
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal"
+    }
+    
+    # On remet les compteurs à zéro
+    payload = {
+        "is_cheating": False,
+        "fraud_reason": None,
+        "last_fraud_detected_at": None
+    }
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.patch(
+            f"{SUPABASE_URL}/rest/v1/profiles?id=eq.{student_id}",
+            json=payload,
+            headers=headers
+        )
+        
+        if resp.status_code == 204 or resp.status_code == 200:
+            return {"status": "success", "message": "L'étudiant peut repasser le quiz"}
+        else:
+            raise HTTPException(status_code=400, detail="Erreur lors de la réinitialisation")
 
 @app.post("/admin/quiz/add")
 async def add_quiz_level(question: dict):
@@ -325,4 +305,26 @@ async def get_last_level():
         if data and len(data) > 0:
             return {"last_level": data[0]['level_number']}
         return {"last_level": 0}
+        
+async def update_fraud_status(user_id: str, status: bool, reason: str):
+    url = f"{SUPABASE_URL}/rest/v1/profiles?id=eq.{user_id}"
     
+    # On génère le timestamp actuel
+    now = datetime.utcnow().isoformat() 
+    
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal"
+    }
+    
+    payload = {
+        "is_cheating": status, 
+        "fraud_reason": reason,
+        "last_fraud_detected_at": now  # Ajout de l'heure de détection
+    }
+    
+    async with httpx.AsyncClient() as client:
+        resp = await client.patch(url, json=payload, headers=headers)
+        print(f"  [SUPABASE] Profil {user_id} marqué tricheur à {now}")

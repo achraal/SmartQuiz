@@ -24,3 +24,8 @@ Thumbs.db
 **/.env
 **/__pycache__/
 **/venv
+**/venv311
+
+# Modèles YOLO (Poids du réseau neurones)
+*.pt
+*.onnx
