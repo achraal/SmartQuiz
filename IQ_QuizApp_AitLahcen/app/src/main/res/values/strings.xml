@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">QuizApp_AitLahcen</string>
+    <string name="btn_back_label">&lt; Retour</string>
 </resources>

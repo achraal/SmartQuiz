@@ -1,0 +1,210 @@
+{
+  "name": "Cerebro",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 2
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -608,
+        -80
+      ],
+      "id": "4a74ee7f-0ca3-4e20-96f6-5bd2a0546ecc",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "url": "{{ $env.API_BASE_URL }}{{ $env.ADMIN_ENDPOINT }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -288,
+        -176
+      ],
+      "id": "bce3ea5b-dfb9-4878-9eeb-410c66a3a279",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1. Récupérer les données de FastAPI\nconst students = items;\n\n// 2. Filtrer uniquement ceux qui ont is_cheating = true\nconst tricheurs = students.filter(s => s.json.is_cheating === true);\n\n// 3. Trier par la date de détection la plus récente (pour voir les derniers incidents)\ntricheurs.sort((a, b) => {\n  return new Date(b.json.last_fraud_detected_at) - new Date(a.json.last_fraud_detected_at);\n});\n\n// 4. Retourner les 3 premiers\nreturn tricheurs.slice(0, 3);"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -16,
+        -208
+      ],
+      "id": "d6b7bf8b-20b7-471e-99a7-ae0763bae2ba",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "url": "{{ $env.API_BASE_URL }}{{ $env.HEALTH_ENDPOINT }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        -304,
+        112
+      ],
+      "id": "6402ba99-b4f6-4079-96b5-d326c0b76007",
+      "name": "HTTP Request1"
+    },
+    {
+      "parameters": {
+        "jsCode": "// On récupère la réponse du endpoint /health\nconst health = items[0].json;\n\n// On prépare un résumé textuel des services\nlet servicesSummary = \"\";\nfor (const [service, status] of Object.entries(health.services)) {\n  servicesSummary += `${service}: ${status} | `;\n}\n\n// On retourne un objet propre pour le nœud Merge\nreturn [{\n  json: {\n    global_status: health.status === \"online\" ? \"✅ Système Opérationnel\" : \"⚠️ Système Dégradé\",\n    timestamp: health.timestamp,\n    services_details: servicesSummary,\n    disk_space: health.services.disk_free_gb + \" GB libres\"\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -32,
+        128
+      ],
+      "id": "a9b53ad7-d3a6-47f7-9431-d60f49af2df9",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        192,
+        -48
+      ],
+      "id": "c9e8973c-260b-4224-a0b7-6141f8f94ac5",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "fromEmail": "{{ $env.SENDER_EMAIL }}",
+        "toEmail": "{{ $env.RECEIVER_EMAIL }}",
+        "subject": "Rapport de Surveillance QuizApp",
+        "html": "={{\n(function() {\n  const health = $(\"Code in JavaScript1\").first().json;\n  const suspects = $(\"Code in JavaScript\").all();\n  const isOk = health.global_status.includes(\"✅\");\n\n  const initials = (name) => (name ? name.slice(0, 2).toUpperCase() : \"??\");\n  const avatarColors = [\n    { bg: \"#e6f1fb\", color: \"#185fa5\" },\n    { bg: \"#fbeaf0\", color: \"#993556\" },\n    { bg: \"#eaf3de\", color: \"#3b6d11\" },\n    { bg: \"#eeedfe\", color: \"#534ab7\" },\n    { bg: \"#faeeda\", color: \"#854f0b\" },\n  ];\n\n  const suspectRows = suspects.map((u, i) => {\n    const av = avatarColors[i % avatarColors.length];\n    return `\n      <tr style=\"border-bottom: 1px solid #e8e8e8;\">\n        <td style=\"padding: 11px 0;\">\n          <table cellpadding=\"0\" cellspacing=\"0\" border=\"0\">\n            <tr>\n              <td style=\"width:32px;height:32px;border-radius:50%;background:${av.bg};color:${av.color};text-align:center;font-size:12px;font-weight:bold;line-height:32px;\">${initials(u.json.username)}</td>\n              <td style=\"padding-left:10px;font-weight:500;color:#1a1a2e;font-family:Arial,sans-serif;\">${u.json.username}</td>\n            </tr>\n          </table>\n        </td>\n        <td style=\"padding:11px 0;text-align:right;\">\n          <span style=\"font-size:11px;font-weight:500;padding:4px 10px;border-radius:20px;background:#fcebeb;color:#a32d2d;font-family:Arial,sans-serif;white-space:nowrap;\">\n            ⚠️ ${u.json.fraud_reason}\n          </span>\n        </td>\n      </tr>`;\n  }).join('');\n\n  return `\n  <div style=\"font-family:Arial,sans-serif;max-width:600px;margin:auto;border:1px solid #e8e8e8;border-radius:12px;overflow:hidden;background:#ffffff;\">\n    \n    <!-- Header -->\n    <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:#1a1a2e;padding:20px 24px;\">\n      <tr>\n        <td align=\"left\">\n          <p style=\"margin:0;font-size:10px;font-weight:500;letter-spacing:0.08em;color:#7f8fa6;text-transform:uppercase;\">Monitoring</p>\n          <h2 style=\"margin:4px 0 0;font-size:20px;font-weight:500;color:#ffffff;\">Rapport QuizApp</h2>\n        </td>\n        <td align=\"right\">\n          <span style=\"font-size:12px;font-weight:bold;padding:6px 12px;border-radius:20px;background:${isOk ? '#eaf3de' : '#fcebeb'};color:${isOk ? '#3b6d11' : '#a32d2d'};\">\n            ${isOk ? '✅ Opérationnel' : '❌ Incident'}\n          </span>\n        </td>\n      </tr>\n    </table>\n\n    <!-- Stats boxes (Table alternative to Flex) -->\n    <div style=\"padding:20px 24px;border-bottom:1px solid #f0f0f0;\">\n      <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\">\n        <tr>\n          <td width=\"32%\" style=\"background:#f7f7f5;border-radius:8px;padding:12px;\">\n            <p style=\"margin:0 0 4px;font-size:10px;color:#888;text-transform:uppercase;\">Statut</p>\n            <p style=\"margin:0;font-size:12px;font-weight:bold;color:#1a1a2e;\">${health.global_status}</p>\n          </td>\n          <td width=\"2%\"></td>\n          <td width=\"32%\" style=\"background:#f7f7f5;border-radius:8px;padding:12px;\">\n            <p style=\"margin:0 0 4px;font-size:10px;color:#888;text-transform:uppercase;\">Disque</p>\n            <p style=\"margin:0;font-size:12px;font-weight:bold;color:#1a1a2e;\">${health.disk_space}</p>\n          </td>\n          <td width=\"2%\"></td>\n          <td width=\"32%\" style=\"background:#f7f7f5;border-radius:8px;padding:12px;\">\n            <p style=\"margin:0 0 4px;font-size:10px;color:#888;text-transform:uppercase;\">Services</p>\n            <p style=\"margin:0;font-size:12px;font-weight:bold;color:#1a1a2e;\">${health.services_details}</p>\n          </td>\n        </tr>\n      </table>\n    </div>\n\n    <!-- Suspects -->\n    <div style=\"padding:20px 24px;\">\n      <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"margin-bottom:14px;\">\n        <tr>\n          <td align=\"left\"><h3 style=\"margin:0;font-size:15px;font-weight:600;color:#1a1a2e;\">🕵️ Suspects détectés</h3></td>\n          <td align=\"right\"><span style=\"font-size:12px;background:#faeeda;color:#854f0b;padding:3px 10px;border-radius:20px;font-weight:bold;\">${suspects.length} cas</span></td>\n        </tr>\n      </table>\n      <table width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"font-size:13px;\">\n        <thead>\n          <tr>\n            <th align=\"left\" style=\"padding-bottom:8px;font-size:10px;text-transform:uppercase;color:#888;border-bottom:1px solid #f0f0f0;\">Utilisateur</th>\n            <th align=\"right\" style=\"padding-bottom:8px;font-size:10px;text-transform:uppercase;color:#888;border-bottom:1px solid #f0f0f0;\">Raison</th>\n          </tr>\n        </thead>\n        <tbody>${suspectRows}</tbody>\n      </table>\n    </div>\n\n    <!-- Footer -->\n    <table width=\"100%\" cellpadding=\"10\" cellspacing=\"0\" border=\"0\" style=\"background:#f7f7f5;border-top:1px solid #f0f0f0;padding:10px 24px;\">\n      <tr>\n        <td align=\"left\" style=\"font-size:11px;color:#aaa;\">⏱ ${health.timestamp}</td>\n        <td align=\"right\" style=\"font-size:11px;color:#aaa;\">QuizApp Monitor</td>\n      </tr>\n    </table>\n  </div>`;\n})()\n}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        416,
+        0
+      ],
+      "id": "73a8ba49-a35d-4470-9cea-63a5d217efb6",
+      "name": "Send an Email",
+      "webhookId": "8221728d-8cbd-407a-9431-29c91037c554",
+      "executeOnce": true,
+      "credentials": {
+        "smtp": {
+          "id": "votre-id-smtp-n8n",
+          "name": "SMTP account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request1": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Send an Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send an Email": {
+      "main": [
+        []
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "227c8890-eb18-4fad-bbfd-40f1c78209cd",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "instance-id-generique"
+  },
+  "id": "id-du-workflow",
+  "tags": []
+}

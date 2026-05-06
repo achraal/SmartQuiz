@@ -80,4 +80,7 @@ dependencies {
 
     implementation("com.google.android.gms:play-services-location:21.0.1")
     implementation("com.google.android.gms:play-services-maps:18.2.0")
+
+    // ML Kit Face Detection
+    implementation("com.google.mlkit:face-detection:16.1.5")
 }

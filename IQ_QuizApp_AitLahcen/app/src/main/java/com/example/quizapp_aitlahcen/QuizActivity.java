@@ -81,6 +81,7 @@ public class QuizActivity extends AppCompatActivity {
     private MediaRecorder chunkRecorder;
     private String chunkPath;
     private boolean isProctoringActive = false;
+    private boolean isUserLeavingPurposefully = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -261,6 +262,9 @@ public class QuizActivity extends AppCompatActivity {
         }.start();
     }
     private void finishQuiz() {
+        isUserLeavingPurposefully = true;
+        isProctoringActive = false;
+
         Intent intent = new Intent(QuizActivity.this, Score.class);
         intent.putExtra("FINAL_SCORE", score);
         intent.putExtra("USER_ID", userId);
@@ -688,6 +692,36 @@ public class QuizActivity extends AppCompatActivity {
                 file.delete(); // On supprime le morceau local après envoi
             }
             @Override public void onFailure(okhttp3.Call call, java.io.IOException e) {}
+        });
+    }
+    @Override
+    protected void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        // Déclenché quand l'utilisateur quitte volontairement l'app (Bouton Home / Recents)
+        if (!isAdmin && !isUserLeavingPurposefully && isProctoringActive) {
+            notifyFraudToBackend("BACKGROUND_DETECTED");
+        }
+    }
+
+    private void notifyFraudToBackend(String reasonType) {
+        String url = SupabaseConfig.FASTAPI_URL + "/monitoring/event";
+        JSONObject json = new JSONObject();
+        try {
+            json.put("user_id", userId);
+            json.put("event_type", reasonType);
+        } catch (JSONException e) { e.printStackTrace(); }
+
+        okhttp3.RequestBody body = okhttp3.RequestBody.create(
+                okhttp3.MediaType.parse("application/json"), json.toString());
+
+        Request request = new Request.Builder().url(url).post(body).build();
+        client.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) { Log.e("FRAUD", "Erreur réseau"); }
+            @Override
+            public void onResponse(Call call, Response response) {
+                Log.d("FRAUD", "Fraude foreground enregistrée");
+            }
         });
     }
 }

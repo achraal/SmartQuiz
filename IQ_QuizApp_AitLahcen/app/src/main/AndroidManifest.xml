@@ -7,6 +7,7 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
 
     <uses-feature
         android:name="android.hardware.camera"
@@ -22,6 +23,12 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.QuizApp_AitLahcen"
         android:usesCleartextTraffic="true">
+        <activity
+            android:name=".CameraCheckActivity"
+            android:exported="false" />
+        <activity
+            android:name=".FraudLogsActivity"
+            android:exported="false" />
         <activity
             android:name=".WelcomeActivity"
             android:exported="false" />

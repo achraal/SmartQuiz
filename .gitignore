@@ -25,7 +25,10 @@ Thumbs.db
 **/__pycache__/
 **/venv
 **/venv311
+**/assets
+**/temp_admin_audio
 
 # Modèles YOLO (Poids du réseau neurones)
 *.pt
 *.onnx
+

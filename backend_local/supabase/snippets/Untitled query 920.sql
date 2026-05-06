@@ -1,0 +1,1 @@
+select * from profiles where username = 'nounou'

@@ -24,10 +24,14 @@ public class WelcomeActivity extends AppCompatActivity {
         btnStartQuiz = findViewById(R.id.btnStartQuiz);
 
         btnStartQuiz.setOnClickListener(v -> {
-            // Lancement du Quiz (remplace QuizActivity par le nom exact de ta classe)
-            Intent intent = new Intent(WelcomeActivity.this, QuizActivity.class);
+            // MODIFICATION : On ne lance plus QuizActivity directement.
+            // On lance d'abord CameraCheckActivity pour valider l'environnement.
+            Intent intent = new Intent(WelcomeActivity.this, CameraCheckActivity.class);
+
+            // On transmet les informations de session indispensables
             intent.putExtra("TOKEN", userToken);
             intent.putExtra("USER_ID", userId);
+
             startActivity(intent);
         });
         btnLogout.setOnClickListener(v -> {

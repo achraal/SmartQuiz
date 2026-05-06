@@ -1,15 +1,12 @@
-import os
-import cv2
+import os, cv2, asyncio, redis, httpx
 import numpy as np
-import httpx
-import asyncio
-import redis
 from rq import Worker, Queue, SimpleWorker
 from ultralytics import YOLO
 from dotenv import load_dotenv
 from datetime import datetime
 import mediapipe as mp
 from mediapipe.python.solutions import face_mesh as mp_face_mesh
+from gtts import gTTS
 
 # --- INITIALISATION MEDIAPIPE (Une seule fois au démarrage) ---
 
@@ -26,6 +23,7 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 REDIS_URL = os.getenv("REDIS_URL")
+COLAB_URL = os.getenv("COLAB_URL")
 
 # Dictionnaire de traduction pour les messages de fraude
 FRAUD_LABELS_FR = {
@@ -81,11 +79,13 @@ def analyze_photo_task(file_content, user_id, camera_type="front"):
     
     try:
         reasons = []
+        confidences = {} # Nouveau : pour stocker les scores
+        
         nparr = np.frombuffer(file_content, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if img is None: return
 
-        # 1. ANALYSE YOLO (Objets seulement)
+        # 1. ANALYSE YOLO
         img_yolo = cv2.resize(img, (640, 640))
         yolo_results = fraud_model(img_yolo, conf=0.2, verbose=False)
         
@@ -97,32 +97,49 @@ def analyze_photo_task(file_content, user_id, camera_type="front"):
 
                 if label == "person" and conf > 0.5:
                     person_count += 1
+                
                 if label in FRAUD_LABELS_FR and conf > 0.35:
-                    reasons.append(FRAUD_LABELS_FR[label])
+                    fraud_msg = FRAUD_LABELS_FR[label]
+                    reasons.append(fraud_msg)
+                    # On garde le score de confiance le plus élevé pour ce label
+                    confidences[fraud_msg] = round(conf, 3)
 
         if person_count > 1:
-            reasons.append(f"Multiples personnes ({person_count})")
+            msg = f"Multiples personnes ({person_count})"
+            reasons.append(msg)
+            confidences[msg] = 1.0 # Score arbitraire car c'est un comptage
 
-        # 2. ANALYSE MEDIAPIPE (Posture seulement)
+        # 2. ANALYSE MEDIAPIPE (Posture)
         if camera_type == "front":
-            is_suspicious, pose_reason = check_head_pose(img)
+            is_suspicious, pose_reason = check_head_pose(img, user_id)
             if is_suspicious:
-                # On ajoute la raison sans condition liée à YOLO
                 reasons.append(pose_reason)
+                confidences[pose_reason] = 1.0 # MediaPipe est basé sur des seuils fixes
 
-        # 3. MISE À JOUR SUPABASE
+        # 3. MISE À JOUR SUPABASE AVEC METADATA
         if reasons:
             unique_reasons = list(set(reasons))
             reason_str = " | ".join(unique_reasons)
             print(f"!!! [FRAUDE] {reason_str}")
-            async def update_all():
-                await asyncio.gather(
+            
+            # On prépare l'objet metadata avec les scores
+            # Ex: {"camera": "front", "confidences": {"Téléphone détecté": 0.85}}
+            metadata_log = {
+                "camera": camera_type,
+                "confidences": {r: confidences.get(r, "N/A") for r in unique_reasons}
+            }
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(asyncio.gather(
                     update_fraud_status_in_supabase(user_id, True, reason_str),
-                    save_fraud_log(user_id, "photo", reason_str, {"camera": camera_type})
-                )
-            asyncio.run(update_all())
+                    save_fraud_log(user_id, "photo", reason_str, metadata_log)
+                ))
+            finally:
+                loop.close()
         else:
-            print("   > [RÉSULTAT] OK : RAS")
+            print("    > [RÉSULTAT] OK : RAS")
             
     except Exception as e:
         print(f"[PHOTO] ❌ Erreur : {e}")
@@ -159,35 +176,73 @@ def analyze_audio_task(audio_bytes, user_id):
     except Exception as e:
         print(f"[AUDIO] ❌ Erreur critique: {e}")
         
-def check_head_pose(img):
+def get_user_calibration_sync(user_id: str):
+    """Version synchrone pour éviter les erreurs d'Event Loop"""
+    import httpx
+    url = f"{SUPABASE_URL}/rest/v1/profiles?id=eq.{user_id}&select=ref_pitch,ref_yaw,ref_brightness"
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"}
+    with httpx.Client() as client: # Client standard, pas 'AsyncClient'
+        resp = client.get(url, headers=headers)
+        data = resp.json()
+        return data[0] if data else None
+        
+        
+def check_head_pose(img, user_id):
     h, w = img.shape[:2]
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    brightness = np.mean(gray)
-    laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+    current_brightness = np.mean(gray)
     
-    print(f"      [DIAGNOSTIC] Taille: {w}x{h} | Lum: {brightness:.1f} | Net: {laplacian_var:.1f}")
+    print(f"      [DIAGNOSTIC] Taille: {w}x{h} | Lum: {current_brightness:.1f}")
 
     def get_results(frame):
+        # On tente plusieurs échelles si le visage n'est pas trouvé
         h_f, w_f = frame.shape[:2]
+        # Essai 1: Taille standard
         ratio = 800 / max(h_f, w_f)
         resized = cv2.resize(frame, (int(w_f * ratio), int(h_f * ratio)))
         frame_rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-        frame_rgb = cv2.GaussianBlur(frame_rgb, (5, 5), 0)
-        return face_mesh.process(frame_rgb)
+        res = face_mesh.process(frame_rgb)
+        
+        # Essai 2: Si échec, on tente en plus grand (plus précis)
+        if not res or not res.multi_face_landmarks:
+            ratio = 1024 / max(h_f, w_f)
+            resized = cv2.resize(frame, (int(w_f * ratio), int(h_f * ratio)))
+            frame_rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+            res = face_mesh.process(frame_rgb)
+            
+        return res
 
-    # 1. Recherche du visage
     results = get_results(img)
-    if not results or not results.multi_face_landmarks:
-        margin_w, margin_h = int(w * 0.1), int(h * 0.1)
-        cropped = img[margin_h:h-margin_h, margin_w:w-margin_w]
-        results = get_results(cropped)
 
-    # 2. Ignorer si pas de visage (pour tes tests)
+    # GESTION DU VISAGE NON TROUVÉ
     if not results or not results.multi_face_landmarks:
-        print("      [INFO] Visage invisible : Ignoré.")
+        # --- NOUVELLE SÉCURITÉ ---
+        # On ne déclenche la fraude QUE si on est vraiment sûr
+        # Pour l'instant, on va juste logger l'échec de détection sans punir
+        # sauf si la lumière chute drastiquement.
+        
+        try:
+            calibration = get_user_calibration_sync(user_id)
+            if calibration and calibration.get('ref_brightness'):
+                ref_br = calibration['ref_brightness']
+                
+                # Cas 1 : Noir total (Fraude quasi-certaine)
+                if current_brightness < (ref_br * 0.15) or current_brightness < 8:
+                    return True, "Caméra obstruée (Noir total)"
+                
+                # Cas 2 : Visage absent mais lumière OK 
+                # ATTENTION : On désactive l'alerte automatique ici pour éviter tes faux positifs
+                # On ne renvoie True que si la luminosité est VRAIMENT différente ou si tu veux être sévère.
+                print("      [DEBUG] MediaPipe a raté le visage, mais on ne punit pas encore.")
+                return False, None 
+                
+        except Exception as e:
+            print(f"      [ERREUR CALIB] : {e}")
+            
         return False, None
+            
 
-    # 3. Analyse des points
+    # 3. Analyse des points (si visage trouvé)
     face_landmarks = results.multi_face_landmarks[0]
     nose = face_landmarks.landmark[1]
     l_eye = face_landmarks.landmark[33]
@@ -196,35 +251,112 @@ def check_head_pose(img):
     forehead = face_landmarks.landmark[10]
 
     face_height = abs(chin.y - forehead.y)
-    
-    # Yaw
-    dist_l = abs(nose.x - l_eye.x)
-    dist_r = abs(nose.x - r_eye.x)
-    ratio_yaw = dist_l / dist_r if dist_r != 0 else 10
-
-    # Pitch (Axe Y inversé : plus c'est grand, plus c'est bas)
-    eye_y_avg = (l_eye.y + r_eye.y) / 2
-    pitch_diff = nose.y - eye_y_avg
-    relative_pitch = pitch_diff / face_height if face_height != 0 else 0
+    ratio_yaw = abs(nose.x - l_eye.x) / abs(nose.x - r_eye.x) if abs(nose.x - r_eye.x) != 0 else 10
+    relative_pitch = (nose.y - (l_eye.y + r_eye.y)/2) / face_height if face_height != 0 else 0
 
     print(f"      [DEBUG] Yaw: {ratio_yaw:.2f} | Pitch Rel: {relative_pitch:.3f}")
 
-    # --- ÉTAPE 4 : LOGIQUE DE DÉTECTION ASSOUPLIE ---
-
-    # 1. Rotation Latérale (Très tolérant)
+    # Seuils assouplis comme convenu
     if ratio_yaw < 0.15 or ratio_yaw > 7.0:
         return True, "Visage tourné (Côté)"
-
-    # 2. Tête Baissée (0.25 laisse de la marge pour lire sans frauder)
     if relative_pitch > 0.25: 
         return True, "Tête baissée (Regard vers le bas)"
-
-    # 3. Tête Levée (0.01 signifie que le nez est presque sur la ligne des yeux)
     if relative_pitch < 0.01: 
         return True, "Tête levée (Regard vers le haut)"
 
     return False, None
     
+    
+def generate_avatar_video_task(user_id, audio_path, is_welcome=False):
+    """
+    Tâche Redis : Prend l'audio enregistré par l'admin, l'envoie au GPU Colab,
+    et stocke la vidéo finale sur Supabase.
+    """
+    print(f"\n[AVATAR] 🎬 Début génération. Welcome mode: {is_welcome}")
+    
+    # Définition du chemin de stockage sur Supabase
+    if is_welcome:
+        # Stockage public pour tous les étudiants
+        storage_path = "admin_assets/welcome_video.mp4"
+        video_filename = "welcome_video.mp4"
+    else:
+        # Message privé pour un étudiant spécifique
+        storage_path = f"avatars/{user_id}_{int(datetime.now().timestamp())}.mp4"
+        video_filename = f"{user_id}.mp4"
+
+    # Image de référence de l'admin (Achraf)
+    # Assure-toi que ce fichier existe dans ton dossier assets/
+    image_path = "assets/me.jpg" 
+
+    try:
+        if not os.path.exists(image_path):
+            print(f"  ❌ Erreur : Photo de l'admin introuvable ({image_path})")
+            return
+
+        # 1. Envoi au Colab (SadTalker / LivePortrait)
+        print(f"  > Envoi au GPU Cloud (Colab)... Audio: {audio_path}")
+        with open(image_path, "rb") as img_file, open(audio_path, "rb") as aud_file:
+            files = {
+                "image": ("image.jpg", img_file, "image/jpeg"),
+                "audio": ("audio.3gp", aud_file, "audio/3gp")
+            }
+            
+            with httpx.Client(timeout=800.0) as client:
+                response = client.post(f"{COLAB_URL}/animate", files=files)
+                
+                if response.status_code == 200:
+                    # 2. Upload du résultat vers Supabase Storage
+                    print(f"  > Vidéo reçue ! Upload vers Supabase : {storage_path}")
+                    
+                    # Note : on utilise le bucket 'admin-assets' selon ton setup
+                    upload_url = f"{SUPABASE_URL}/storage/v1/object/admin-assets/{storage_path}"
+                    headers = {
+                        "apikey": SUPABASE_KEY,
+                        "Authorization": f"Bearer {SUPABASE_KEY}",
+                        "Content-Type": "video/mp4",
+                        "x-upsert": "true"
+                    }
+                    
+                    upload_resp = client.post(upload_url, content=response.content, headers=headers)
+                    
+                    if upload_resp.status_code == 200:
+                        # 3. Si message privé, on met à jour le profil de l'étudiant
+                        if not is_welcome:
+                            print("  > Mise à jour du lien avatar dans le profil étudiant...")
+                            asyncio.run(update_avatar_link_in_db(user_id, storage_path))
+                        
+                        print(f"✅ [AVATAR FINI] Disponible à : {storage_path}")
+                else:
+                    print(f"  ❌ Erreur Colab ({response.status_code}): {response.text}")
+
+    except Exception as e:
+        print(f"  ❌ [WORKER ERROR] : {e}")
+    finally:
+        # Nettoyage de l'audio temporaire envoyé par FastAPI
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+            print(f"  > Nettoyage audio temporaire effectué.")
+
+async def update_avatar_link_in_db(user_id, storage_path):
+    """Met à jour le champ avatar_url dans Supabase pour l'étudiant"""
+    async with httpx.AsyncClient() as client:
+        # On pointe vers l'étudiant spécifique
+        url = f"{SUPABASE_URL}/rest/v1/profiles?id=eq.{user_id}"
+        headers = {
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Content-Type": "application/json"
+        }
+        # On enregistre le chemin relatif pour que l'app Android puisse construire l'URL finale
+        payload = {
+            "avatar_url": storage_path, 
+            "last_avatar_at": datetime.now().isoformat()
+        }
+        resp = await client.patch(url, json=payload, headers=headers)
+        if resp.status_code == 204 or resp.status_code == 200:
+            print(f"  > [DB] Lien mis à jour pour l'étudiant {user_id}")
+        else:
+            print(f"  > [DB ERROR] Échec mise à jour : {resp.text}")
 
 
 if __name__ == '__main__':

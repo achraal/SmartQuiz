@@ -1,1 +1,1 @@
-update profiles set is_cheating = false, last_fraud_detected_at = null, fraud_reason = null where username = 'testfinal'
+update profiles set is_cheating = false, last_fraud_detected_at = null, fraud_reason = null where username = 'said'

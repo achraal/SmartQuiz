@@ -112,6 +112,22 @@
         android:backgroundTint="#2E7D32"
         android:text="Enregistrer Question"
         android:textColor="@android:color/white" />
+    <Button
+        android:id="@+id/btnViewLogs"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Voir les Alertes Fraude"
+        android:backgroundTint="#FF5722"
+        android:textColor="@android:color/white"
+        android:layout_marginTop="8dp"/>
+    <Button
+        android:id="@+id/btnRecordAvatar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Maintenir pour parler (Avatar)"
+        android:backgroundTint="#FF9800"
+        android:textColor="@android:color/white"
+        android:layout_marginTop="8dp"/>
 
     <View
         android:layout_width="match_parent"

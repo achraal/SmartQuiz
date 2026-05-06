@@ -1,6 +1,7 @@
 package com.example.quizapp_aitlahcen;
 
 import android.content.Intent;
+import android.media.MediaRecorder;
 import android.os.Bundle;
 import android.util.Log;
 import android.widget.ArrayAdapter;
@@ -36,6 +37,12 @@ public class AdminActivity extends AppCompatActivity {
     private RecyclerView rvStudents;
     private StudentAdapter adapter;
     private List<Student> studentList = new ArrayList<>();
+    private Button btnViewLogs;
+    // --- Section Avatar ---
+    private Button btnRecordAvatar;
+    private MediaRecorder recorder;
+    private String audioPath;
+    private boolean isRecording = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -55,6 +62,32 @@ public class AdminActivity extends AppCompatActivity {
         });
         rvStudents.setAdapter(adapter);
         btnLogout = findViewById(R.id.btnLogout);
+
+        btnViewLogs = findViewById(R.id.btnViewLogs); // Assure-toi de l'ajouter dans ton XML
+
+        btnViewLogs.setOnClickListener(v -> {
+            Intent intent = new Intent(this, FraudLogsActivity.class);
+            intent.putExtra("TOKEN", adminToken);
+            startActivity(intent);
+        });
+        // Setup de l'audio
+        audioPath = getExternalCacheDir().getAbsolutePath() + "/admin_voice.3gp";
+        btnRecordAvatar = findViewById(R.id.btnRecordAvatar);
+
+        btnRecordAvatar.setOnTouchListener((v, event) -> {
+            switch (event.getAction()) {
+                case android.view.MotionEvent.ACTION_DOWN:
+                    startRecording();
+                    btnRecordAvatar.setText("Enregistrement...");
+                    return true;
+                case android.view.MotionEvent.ACTION_UP:
+                    stopRecording();
+                    btnRecordAvatar.setText("Maintenir pour parler");
+                    sendAudioToBackend(); // Envoi auto après enregistrement
+                    return true;
+            }
+            return false;
+        });
 
         // 3. Charger les données
         loadStudents();
@@ -232,5 +265,67 @@ public class AdminActivity extends AppCompatActivity {
         intent.putExtra("STUDENT_NAME", student.username);
         intent.putExtra("TOKEN", adminToken); // On repasse le token pour les requêtes
         startActivity(intent);
+    }
+    private void startRecording() {
+        recorder = new MediaRecorder();
+        recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
+        recorder.setOutputFormat(MediaRecorder.OutputFormat.THREE_GPP);
+        recorder.setAudioEncoder(MediaRecorder.AudioEncoder.AMR_NB);
+        recorder.setOutputFile(audioPath);
+        try {
+            recorder.prepare();
+            recorder.start();
+            isRecording = true;
+        } catch (IOException e) {
+            Log.e("Avatar", "prepare() failed");
+        }
+    }
+
+    private void stopRecording() {
+        if (isRecording) {
+            try {
+                recorder.stop();
+                recorder.release();
+            } catch (RuntimeException stopException) {
+                // Gère le cas où l'appui est trop court
+                Log.e("Avatar", "Recording too short");
+            }
+            recorder = null;
+            isRecording = false;
+        }
+    }
+    private void sendAudioToBackend() {
+        java.io.File file = new java.io.File(audioPath);
+        if (!file.exists()) return;
+
+        okhttp3.RequestBody fileBody = okhttp3.RequestBody.create(
+                okhttp3.MediaType.parse("audio/3gp"), file);
+
+        okhttp3.MultipartBody requestBody = new okhttp3.MultipartBody.Builder()
+                .setType(okhttp3.MultipartBody.FORM)
+                .addFormDataPart("audio", "voice.3gp", fileBody)
+                .addFormDataPart("user_id", "admin_achraf")
+                .addFormDataPart("is_welcome", "true")
+                .build();
+
+        Request request = new Request.Builder()
+                .url(SupabaseConfig.FASTAPI_URL + "/admin/generate-avatar")
+                .addHeader("Authorization", "Bearer " + adminToken) // AJOUTE CETTE LIGNE
+                .post(requestBody)
+                .build();
+
+        client.newCall(request).enqueue(new Callback() {
+            @Override
+            public void onFailure(Call call, IOException e) {
+                runOnUiThread(() -> Toast.makeText(AdminActivity.this, "Erreur réseau avatar", Toast.LENGTH_SHORT).show());
+            }
+
+            @Override
+            public void onResponse(Call call, Response response) throws IOException {
+                if (response.isSuccessful()) {
+                    runOnUiThread(() -> Toast.makeText(AdminActivity.this, "Voix envoyée au GPU !", Toast.LENGTH_SHORT).show());
+                }
+            }
+        });
     }
 }
