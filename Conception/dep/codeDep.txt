@@ -1,0 +1,44 @@
+@startuml
+title Diagramme de Déploiement - Système Cerebro (Architecture Hybride)
+
+skinparam componentStyle uml2
+skinparam node {
+    BackgroundColor<<Docker>> LightCyan
+    BackgroundColor<<External>> LightYellow
+}
+
+node "Smartphone Étudiant" {
+    artifact "Cerebro Mobile App\n(Java/XML)" as MobileApp
+}
+
+node "Serveur Local" <<Docker>> {
+    node "Docker Engine" {
+        package "Réseau Interne Docker" {
+            component "Backend API\n(FastAPI)" as Backend
+            component "Message Broker\n(Redis)" as Redis
+            component "IA Worker\n(YOLOv8 & MediaPipe)" as IA
+            component "Automation Engine\n(n8n)" as n8n
+            
+            database "Supabase Local\n(PostgreSQL)" as DB
+            storage "Supabase Storage\n(Local S3)" as LocalStorage
+        }
+    }
+}
+
+node "Cloud / GPU Distant" <<External>> {
+    component "Ngrok Tunnel" as Ngrok
+    component "Google Colab\n(LivePortrait Model)" as Colab
+}
+
+' Relations de connexion
+MobileApp -[#blue]-> Backend : HTTPS / REST (Port 8000)
+Backend -[#orange]-> Redis : Task Queue (TCP 6379)
+Redis -[#orange]-> IA : Pull Tasks / Inference
+Backend -[#green]-> DB : SQL / Auth
+Backend -[#green]-> LocalStorage : Médias (S3)
+n8n -[#purple]-> DB : Analytics SQL
+n8n -[#purple]-> Backend : Webhooks
+Backend .right.> Ngrok : Tunneling
+Ngrok .right.> Colab : Render Avatar
+
+@enduml

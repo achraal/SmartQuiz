@@ -1,0 +1,68 @@
+@startuml cerebro_usecases_final
+!theme plain
+
+' --- Style UI ---
+skinparam usecase {
+    BackgroundColor #E3F2FD
+    BorderColor #1976D2
+}
+skinparam actor {
+    BackgroundColor #FFF3E0
+    BorderColor #F57C00
+}
+skinparam rectangle {
+    BackgroundColor white
+}
+
+title **Cerebro** - Diagramme de Cas d'Utilisation
+
+left to right direction
+
+' --- Acteurs principaux (à gauche) ---
+actor "Étudiant" as Etudiant
+actor "Administrateur" as Admin
+
+' --- Système ---
+rectangle "Système Cerebro" {
+    (S'authentifier) as UC1
+    (Passer un test) as UC2
+    (Interagir avec l'avatar) as UC3
+    
+    (Capturer preuves biométriques) as UC4 << automatique >>
+    (Enregistrer flux audio) as UC5 << automatique >>
+    (Vérifier le focus application) as UC6 << automatique >>
+
+    (Gérer la banque de questions) as UC7
+    (Surveiller les sessions en temps réel) as UC8
+    (Consulter les preuves multimédias) as UC9
+
+    (Analyse statistique & scores) as UC10
+    (Détecter anomalies spatiales / GPS) as UC11
+    (Health Check infrastructure) as UC12
+}
+
+' --- Acteur secondaire (à droite) ---
+actor "Système n8n" as n8n << System >>
+
+' --- Relations Gauche (Acteurs -> UC) ---
+Etudiant -- UC1
+Etudiant -- UC2
+Etudiant -- UC3
+
+Admin -- UC1
+Admin -- UC7
+Admin -- UC8
+Admin -- UC9
+
+' --- Relations Droite (UC -> Acteur) ---
+' Inverser le sens de la flèche force n8n à droite
+UC10 -- n8n
+UC11 -- n8n
+UC12 -- n8n
+
+' --- Inclusions ---
+UC2 ..> UC4 : <<include>>
+UC2 ..> UC5 : <<include>>
+UC2 ..> UC6 : <<include>>
+
+@enduml

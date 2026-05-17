@@ -1,0 +1,93 @@
+@startuml cerebro_sequence_styled
+!theme plain
+
+' --- Configuration du style (Adapté de Fiducia) ---
+skinparam sequenceArrowThickness 2
+skinparam participant {
+    BackgroundColor #E3F2FD
+    BorderColor #1976D2
+}
+skinparam actor {
+    BackgroundColor #FFF3E0
+    BorderColor #F57C00
+}
+skinparam database {
+    BackgroundColor #F1F8E9
+    BorderColor #4CAF50
+}
+skinparam sequenceMessageAlign center
+
+title **Cerebro** - Déroulement d'une Session de Test
+
+' --- Définition des acteurs et composants ---
+actor "Étudiant" as User
+participant "App Mobile\n(Android/Java)" as Mobile
+participant "Backend\n(FastAPI)" as API
+participant "Analyse IA\n(YOLO)" as IA
+database "Supabase\n(PostgreSQL/Storage)" as DB
+participant "Workflow\n(n8n)" as n8n
+
+' --- Étape 1 : Initialisation ---
+== Authentification et Initialisation ==
+
+User -> Mobile: Saisit identifiants
+Mobile -> API: POST /auth/login
+API -> DB: Vérifier utilisateur
+DB --> API: OK (JWT)
+API --> Mobile: Token de session
+Mobile --> User: Affiche Dashboard
+
+' --- Étape 2 : Session de Test ---
+== Session de Test & Surveillance Active ==
+
+User -> Mobile: Démarre le Quiz 
+activate Mobile
+
+group Flux de Surveillance (Parallèle) 
+    Mobile -> Mobile: Activer Caméra & Micro
+    loop Toutes les X secondes
+        Mobile -> API: Upload Captures & Audio (Multipart)
+        API -> DB: Stocker médias (Supabase Storage) 
+        API -> IA: Analyser Image (YOLO) 
+        IA --> API: Résultat détection (Fraude ?)
+        alt Si détection suspecte
+            API -> DB: INSERT AlerteFraude 
+        end
+    end
+end
+
+User -> Mobile: Répond aux questions 
+Mobile -> Mobile: Vérifier focus Foreground
+User -> Mobile: Termine le test
+
+' --- Étape 3 : Clôture ---
+== Clôture et Géolocalisation ==
+
+Mobile -> Mobile: Récupérer coordonnées GPS
+Mobile -> API: POST /session/finaliser (Scores + GPS) 
+deactivate Mobile
+activate API
+API -> DB: UPDATE Session (Statut: Terminé)
+API --> Mobile: Score calculé
+deactivate API
+Mobile --> User: Affiche Score Final 
+
+' --- Étape 4 : Analyse n8n ---
+== Analyse Automatisée (n8n) ==
+
+n8n -> API: Trigger Audit (Horaire/Quotidien) 
+activate n8n
+API -> DB: SELECT Stats & Alertes
+DB --> API: Données
+API --> n8n: JSON Data
+n8n -> n8n: Calcul Moyennes & Top Suspects 
+n8n -> DB: UPDATE RapportsStatistiques 
+deactivate n8n
+
+note over User, n8n
+    **Intégrité garantie** : 
+    Les preuves multimédias sont liées à 
+    la session pour l'audit de l'Admin.
+end note
+
+@enduml

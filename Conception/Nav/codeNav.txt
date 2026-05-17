@@ -1,0 +1,93 @@
+@startuml
+title Architecture de Navigation - Projet Cerebro
+
+' --- Configuration du Style ---
+skinparam backgroundColor #FDFDFD
+skinparam RoundCorner 15
+skinparam state {
+  BackgroundColor #FFFFFF
+  BorderColor #2C3E50
+  FontName "Verdana"
+  FontSize 12
+  ArrowColor #34495E
+  
+  ' Styles personnalisés
+  BackgroundColor<<Surveillance>> #FFF5F5
+  BorderColor<<Surveillance>> #E74C3C
+  FontColor<<Surveillance>> #C0392B
+  
+  BackgroundColor<<Admin>> #F0F7FF
+  BorderColor<<Admin>> #2980B9
+  
+  BackgroundColor<<Action>> #F4FFF4
+  BorderColor<<Action>> #27AE60
+}
+
+' --- Navigation ÉTUDIANT ---
+state "ESPACE ÉTUDIANT" as EspaceEtudiant {
+    
+    [*] --> Splash : Lancement
+    Splash --> Auth : Initialisation
+    
+    state "Authentification" as Auth {
+        [*] --> Login
+        Login --> Register : "S'inscrire"
+        Register --> Login : "Se connecter"
+    }
+    
+    Auth --> Dash : "Succès"
+    
+    state "Dashboard Étudiant" as Dash {
+        [*] --> Avatar_Guide
+        Avatar_Guide --> QuizList : "Explorer"
+        Avatar_Guide --> History : "Mes Scores"
+    }
+    
+    state "Session de Test" as Session {
+        state "Interface Quiz" as IQ
+        state "Surveillance ACTIVE" as SV <<Surveillance>> {
+            [*] --> Monitoring
+            Monitoring : • Capture Photos
+            Monitoring : • Enregistrement Audio
+            Monitoring : • IA YOLO (Détection)
+        }
+        [*] --> IQ
+    }
+    
+    QuizList --> Session : "Démarrer"
+    Session --> Results : "Soumettre"
+    Results --> Dash : "Accueil"
+}
+
+' --- Navigation ADMIN ---
+state "ESPACE ADMIN" as EspaceAdmin <<Admin>> {
+    
+    [*] --> AdminLogin
+    AdminLogin --> AdminDash : "Auth OK"
+    
+    state "Dashboard Central" as AdminDash {
+        [*] --> Stats_n8n
+        Stats_n8n : • Volume des tests
+        Stats_n8n : • Top 3 Suspects
+    }
+    
+    state "Gestion de Contenu" as CRUD <<Action>> {
+        [*] --> QuestionBank
+        QuestionBank --> EditForm : "Modifier"
+        EditForm --> QuestionBank : "Enregistrer"
+    }
+    
+    state "Audit & Preuves" as Audit <<Surveillance>> {
+        [*] --> SessionList
+        SessionList --> EvidenceView : "Analyser"
+        EvidenceView : • Photos Horodatées
+        EvidenceView : • Flux Audio
+    }
+    
+    AdminDash --> CRUD : "Gérer Quiz"
+    AdminDash --> Audit : "Vérifier Fraudes"
+}
+
+' Alignement horizontal des deux blocs
+EspaceEtudiant -[hidden]right-> EspaceAdmin
+@enduml

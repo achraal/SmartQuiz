@@ -1,0 +1,183 @@
+@startuml cerebro_classes_complet_vertical
+!theme plain
+skinparam classAttributeIconSize 0
+skinparam linetype ortho
+' Optimisation de l'espace vertical
+skinparam ranksep 60
+skinparam nodesep 30
+
+title **Cerebro - Diagramme de classes (Format Portrait)**
+
+' --- BLOC DU HAUT : LOGIQUE ET INTERFACE ---
+package "Application UI & Logic" <<Rectangle>> {
+    class AdminActivity {
+      -adminToken : String
+      -etQuestion : EditText
+      -client : OkHttpClient
+    }
+
+    class Login {
+      -etEmail : EditText
+      -etPassword : EditText
+    }
+
+    class Register {
+      -etUsername : EditText
+      -etEmail : EditText
+      -etPassword : EditText
+    }
+
+    class WelcomeActivity {
+      -userId : String
+      -userToken : String
+    }
+
+    class QuizActivity {
+      -currentLevel : int
+      -score : int
+      -userId : String
+      -sessionTimestamp : String
+    }
+
+    class CameraCheckActivity {
+      -userId : String
+      -currentPitch : float
+      -currentYaw : float
+    }
+
+    class MonitoringActivity {
+      -studentId : String
+      -studentName : String
+      -adminToken : String
+    }
+
+    class FraudLogsActivity {
+      -adminToken : String
+    }
+
+    class Score {
+      -userId : String
+      -userToken : String
+    }
+
+    ' Adapters placés en haut avec la logique
+    class StudentAdapter {
+      -students : List<Student>
+    }
+    class AudioAdapter {
+      -audioUrls : List<String>
+    }
+    class FraudSummaryAdapter {
+      -fullList : List<FraudSummary>
+      -displayLogs : List<FraudLog>
+    }
+    class SessionAdapter {
+      -sessions : List<Session>
+    }
+    class PhotoAdapter {
+      -photoUrls : List<String>
+      -adminToken : String
+    }
+}
+
+' Flèche invisible pour forcer la superposition
+"Application UI & Logic" -[hidden]down-> "Data Models & DTOs"
+
+' --- BLOC DU BAS : DONNÉES ET MODÈLES ---
+package "Data Models & DTOs" <<Rectangle>> {
+    class Student {
+      -id : String
+      -username : String
+      -email : String
+      -bestscore : int
+      -ischeating : boolean
+      -fraudreason : String
+    }
+
+    class QuizQuestion {
+      -questiontext : String
+      -optiona : String
+      -optionb : String
+      -optionc : String
+      -optiond : String
+      -correctoption : String
+      -imageurl : String
+      -levelnumber : int
+    }
+
+    class Session {
+      -date : String
+      +frontPhotos : List<String>
+      +backPhotos : List<String>
+      +audios : List<String>
+    }
+
+    class FraudSummary {
+      -userid : String
+      -username : String
+      -logcount : int
+      -lastfraud : String
+      +logs : List<FraudLog>
+    }
+
+    class FraudLog {
+      -id : String
+      -type : String
+      -reason : String
+      -createdat : String
+      +profiles : Profile
+    }
+
+    class Profile {
+      -username : String
+    }
+
+    class MonitoringFullResponse {
+      +gpspoints : List<MonitoringRecord>
+      +sessions : List<SessionData>
+      +studentinfo : StudentInfo
+    }
+
+    class MonitoringRecord {
+      -latitude : double
+      -longitude : double
+      -address : String
+      -photoname : String
+      -capturedat : String
+    }
+
+    class StudentInfo {
+      -ischeating : boolean
+      -fraudreason : String
+      -lastfrauddetectedat : String
+    }
+
+    class SessionData {
+      -date : String
+      +frontPhotos : List<String>
+      +backPhotos : List<String>
+      +audios : List<String>
+    }
+
+    class StorageFile {
+      -name : String
+      -id : String
+    }
+}
+
+' --- RELATIONS ---
+' Relations UI -> Adapters/Logic
+AdminActivity --> StudentAdapter
+AdminActivity --> MonitoringActivity
+MonitoringActivity --> SessionAdapter
+MonitoringActivity --> AudioAdapter
+MonitoringActivity --> PhotoAdapter
+FraudLogsActivity --> FraudSummaryAdapter
+QuizActivity --> QuizQuestion
+Score --> MonitoringRecord
+
+' Relations entités (contraintes par le placement vertical)
+Student "1" -- "*" Session
+FraudSummary "1" -- "*" FraudLog
+MonitoringFullResponse "1" -- "*" MonitoringRecord
+@enduml

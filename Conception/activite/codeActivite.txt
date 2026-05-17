@@ -1,0 +1,54 @@
+@startuml
+title Diagramme d'Activité - Système Cerebro
+
+|Étudiant (App Mobile)|
+start
+:Authentification;
+if (Identifiants valides ?) then (Oui)
+  :Accès au Tableau de Bord;
+  :Lancement du Quiz;
+  
+  fork
+    :Passation des questions;
+    :Calcul du score;
+  fork again
+    partition "Surveillance Active (Background)" {
+      while (Test en cours ?) is (Oui)
+        :Capture photos (Frontale/Arrière);
+        :Enregistrement audio continu;
+        :Vérification Foreground (App focus);
+        :Envoi des flux vers FastAPI/Supabase;
+      endwhile (Fin du test)
+    }
+  end fork
+
+  :Enregistrement Géolocalisation (GPS);
+  :Soumission finale des données;
+else (Non)
+  :Affichage Erreur;
+  stop
+endif
+
+|Système Automatisé (n8n)|
+:Récupération des données de session;
+fork
+  :Analyse Spatiale (Calcul distances via JS);
+fork again
+  :Analyse Statistique (Moyenne, Volume);
+fork again
+  :Analyse IA (YOLO - Détection fraude);
+end fork
+:Génération du rapport d'anomalies;
+:Extraction du "Top 3 suspects";
+
+|Administrateur (Dashboard)|
+:Consultation des sessions;
+if (Suspicion de fraude ?) then (Oui)
+  :Visualisation des preuves (Photos/Audio);
+  :Validation de l'intégrité;
+else (Non)
+  :Clôture de la session;
+endif
+
+stop
+@enduml
